@@ -1,0 +1,6 @@
+Flask>=3.0,<4
+waitress>=3.0,<4
+phonenumbers>=8.13,<9
+ddgs>=9.0,<10
+requests>=2.31,<3
+Werkzeug>=3.0,<4
