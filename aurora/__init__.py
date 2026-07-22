@@ -1,0 +1,1 @@
+"""AURORA application package."""
