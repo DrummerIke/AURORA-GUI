@@ -23,11 +23,17 @@ else
   cd "$BASE"
 fi
 
-python3 -m pip install --upgrade pip
-python3 -m pip install -r requirements.txt
-python3 -m py_compile app.py phone_engine.py web_search_engine.py
-chmod +x app.py install.sh
+if ! python3 -m venv --help >/dev/null 2>&1; then
+  echo "Не найден модуль venv. Выполни: sudo apt install python3-venv"
+  exit 1
+fi
+
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m py_compile app.py phone_engine.py web_search_engine.py aurora/*.py
+chmod +x app.py install.sh run.sh
 
 echo
-echo "AURORA установлена. Запуск:"
-echo "cd ~/AURORA-GUI && python3 app.py"
+echo "AURORA установлена в изолированное окружение."
+echo "Запуск: cd ~/AURORA-GUI && ./run.sh"
