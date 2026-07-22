@@ -9,11 +9,12 @@ LABELS = {
     "person": "ФИО",
     "organization": "Организация",
     "email": "Email",
+    "username": "Username",
     "social_profile": "Публичный профиль",
+    "registered_service": "Сервисы, где найден email",
     "listing": "Объявление",
     "public_address": "Публичный адрес",
     "document": "Документ",
-    "username": "Username",
     "domain": "Домен",
 }
 
@@ -32,10 +33,51 @@ def _dedupe(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(best.values(), key=lambda x: (-int(x.get("confidence", 0)), x.get("kind", "")))
 
 
-def build_person_card(phone_report: dict, search_result: dict, output_dir: Path) -> dict:
-    phone = phone_report.get("phone", {})
-    findings = _dedupe(list(search_result.get("findings", [])))
+def _enrichment_findings(enrichment: dict) -> list[dict]:
+    output: list[dict] = []
 
+    for username in enrichment.get("usernames", []):
+        output.append({
+            "kind": "username",
+            "value": username,
+            "confidence": 55,
+            "sources": [],
+        })
+
+    for url in enrichment.get("profiles", []):
+        output.append({
+            "kind": "social_profile",
+            "value": url,
+            "confidence": 45,
+            "sources": [{"url": url, "title": "Найденный профиль"}],
+        })
+
+    for item in enrichment.get("registered_services", []):
+        email = item.get("email", "")
+        service = item.get("service", "")
+        value = f"{email}: {service}" if email else service
+        output.append({
+            "kind": "registered_service",
+            "value": value,
+            "confidence": 45,
+            "sources": [],
+        })
+
+    return output
+
+
+def build_person_card(
+    phone_report: dict,
+    search_result: dict,
+    output_dir: Path,
+    enrichment: dict | None = None,
+) -> dict:
+    phone = phone_report.get("phone", {})
+    all_findings = list(search_result.get("findings", []))
+    if enrichment:
+        all_findings.extend(_enrichment_findings(enrichment))
+
+    findings = _dedupe(all_findings)
     grouped: dict[str, list[dict]] = {}
     for item in findings:
         grouped.setdefault(item.get("kind", "unknown"), []).append(item)
@@ -43,6 +85,10 @@ def build_person_card(phone_report: dict, search_result: dict, output_dir: Path)
     people = grouped.get("person", [])
     primary_name = people[0]["value"] if people else None
     primary_confidence = int(people[0].get("confidence", 0)) if people else 0
+
+    modules = []
+    if enrichment:
+        modules = enrichment.get("modules", [])
 
     card = {
         "phone": phone.get("e164") or phone_report.get("input"),
@@ -57,10 +103,11 @@ def build_person_card(phone_report: dict, search_result: dict, output_dir: Path)
         "source_count": len(search_result.get("results", [])),
         "candidate_count": len(search_result.get("candidates", [])),
         "search_seconds": search_result.get("elapsed_seconds"),
+        "modules": modules,
         "warning": (
             "Карточка собрана только из открытых источников. Совпадение не доказывает "
             "личность текущего владельца номера. Адрес может относиться к организации, "
-            "объявлению или месту оказания услуги."
+            "объявлению или месту оказания услуги. Результаты профилей требуют ручной проверки."
         ),
     }
 
@@ -95,14 +142,14 @@ def render_person_card(card: dict) -> str:
     entities = card.get("entities", {})
     order = [
         "person", "organization", "email", "username", "social_profile",
-        "listing", "document", "domain", "public_address",
+        "registered_service", "listing", "document", "domain", "public_address",
     ]
     for kind in order:
         items = entities.get(kind, [])
         if not items:
             continue
         rows = []
-        for item in items[:20]:
+        for item in items[:40]:
             value = esc(item.get("value"))
             confidence = int(item.get("confidence", 0))
             sources = item.get("sources", [])
@@ -112,7 +159,7 @@ def render_person_card(card: dict) -> str:
                 title = source.get("title") or source.get("domain") or "Источник"
                 if url:
                     links.append(f'<a href="{html.escape(url)}" target="_blank">{html.escape(title)}</a>')
-            source_html = " · ".join(links) or "Источник не сохранён"
+            source_html = " · ".join(links)
             rows.append(
                 '<div class="entity">'
                 f'<div><strong>{value}</strong><div class="sources">{source_html}</div></div>'
@@ -122,6 +169,20 @@ def render_person_card(card: dict) -> str:
         sections.append(
             f'<section><h2>{html.escape(LABELS.get(kind, kind))}</h2>{"".join(rows)}</section>'
         )
+
+    modules = card.get("modules", [])
+    if modules:
+        rows = []
+        for module in modules:
+            status = module.get("status", "unknown")
+            rows.append(
+                '<div class="entity">'
+                f'<div><strong>{esc(module.get("tool"))}</strong>'
+                f'<div class="sources">Цель: {esc(module.get("target"))}</div></div>'
+                f'<div class="score">{esc(status)}</div>'
+                '</div>'
+            )
+        sections.append(f'<section><h2>Модули обогащения</h2>{"".join(rows)}</section>')
 
     if not sections:
         sections.append(
