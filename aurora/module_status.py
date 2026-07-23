@@ -27,11 +27,12 @@ def _python(package: str, name: str, category: str, note: str = "") -> ModuleSta
 def get_module_status() -> list[dict]:
     modules = [
         _python("phonenumbers", "Phone metadata", "phone", "Нормализация, оператор и регион"),
-        _python("ddgs", "Web search", "search", "Поиск открытых публикаций"),
+        _python("ddgs", "Web search", "search", "Адресный поиск открытых публикаций"),
         _binary("phoneinfoga", "phone", "Дополнительное исследование номера"),
-        _binary("sherlock", "username", "Поиск публичных профилей"),
+        _binary("sherlock", "username", "Быстрый поиск публичных профилей"),
         _binary("maigret", "username", "Расширенный поиск username"),
-        _binary("holehe", "email", "Проверка публичных регистрационных признаков"),
+        _binary("socialscan", "username", "Проверка username и email на популярных платформах"),
+        _binary("holehe", "email", "Публичные признаки использования email"),
         _binary("ghunt", "email", "Открытые данные экосистемы Google; требует отдельной настройки"),
         _binary("spiderfoot", "orchestrator", "Дополнительный OSINT-оркестратор"),
     ]
