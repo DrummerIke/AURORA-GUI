@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .quality_filter import LOW_TRUST_PHONE_DOMAINS, valid_address, valid_person
+
 LABELS = {
     "person": "ФИО",
     "organization": "Организация",
@@ -31,6 +33,37 @@ def _dedupe(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if current is None or int(item.get("confidence", 0)) > int(current.get("confidence", 0)):
             best[key] = item
     return sorted(best.values(), key=lambda x: (-int(x.get("confidence", 0)), x.get("kind", "")))
+
+
+def _trusted_sources(item: dict) -> list[dict]:
+    sources = item.get("sources", []) or []
+    return [
+        source for source in sources
+        if str(source.get("domain", "")).casefold() not in LOW_TRUST_PHONE_DOMAINS
+    ]
+
+
+def _credible_item(item: dict, carrier_name: str | None = None) -> bool:
+    kind = str(item.get("kind", ""))
+    value = str(item.get("value", "")).strip()
+    sources = item.get("sources", []) or []
+
+    # Защита последнего уровня: карточка никогда не публикует ФИО или адрес,
+    # которые не прошли строгую проверку, даже если предыдущий этап дал сбой.
+    if kind == "person":
+        return int(item.get("confidence", 0)) >= 70 and valid_person(value, sources)
+    if kind == "public_address":
+        return valid_address(value, sources)
+
+    # Название мобильного оператора из каталогов — это метаданные номера,
+    # а не организация владельца.
+    if kind == "organization" and carrier_name:
+        normalized_value = value.casefold().replace('"', "").replace("«", "").replace("»", "")
+        normalized_carrier = carrier_name.casefold().replace('"', "")
+        if normalized_carrier and normalized_carrier in normalized_value and not _trusted_sources(item):
+            return False
+
+    return True
 
 
 def _enrichment_findings(enrichment: dict) -> list[dict]:
@@ -73,11 +106,15 @@ def build_person_card(
     enrichment: dict | None = None,
 ) -> dict:
     phone = phone_report.get("phone", {})
+    carrier_name = phone.get("carrier")
     all_findings = list(search_result.get("findings", []))
     if enrichment:
         all_findings.extend(_enrichment_findings(enrichment))
 
-    findings = _dedupe(all_findings)
+    findings = [
+        item for item in _dedupe(all_findings)
+        if _credible_item(item, carrier_name=carrier_name)
+    ]
     grouped: dict[str, list[dict]] = {}
     for item in findings:
         grouped.setdefault(item.get("kind", "unknown"), []).append(item)
@@ -86,28 +123,26 @@ def build_person_card(
     primary_name = people[0]["value"] if people else None
     primary_confidence = int(people[0].get("confidence", 0)) if people else 0
 
-    modules = []
-    if enrichment:
-        modules = enrichment.get("modules", [])
+    modules = enrichment.get("modules", []) if enrichment else []
 
     card = {
         "phone": phone.get("e164") or phone_report.get("input"),
         "national": phone.get("national"),
-        "operator": phone.get("carrier"),
+        "operator": carrier_name,
         "region": phone.get("location") or phone.get("region"),
         "country": phone.get("country"),
         "type": phone.get("type"),
         "possible_name": primary_name,
         "name_confidence": primary_confidence,
+        "identity_status": "confirmed_candidate" if primary_name else "not_found",
         "entities": grouped,
         "source_count": len(search_result.get("results", [])),
         "candidate_count": len(search_result.get("candidates", [])),
         "search_seconds": search_result.get("elapsed_seconds"),
         "modules": modules,
         "warning": (
-            "Карточка собрана только из открытых источников. Совпадение не доказывает "
-            "личность текущего владельца номера. Адрес может относиться к организации, "
-            "объявлению или месту оказания услуги. Результаты профилей требуют ручной проверки."
+            "Карточка собрана только из открытых источников. Если ФИО не найдено, Aurora не подставляет "
+            "словосочетания со страниц и прямо указывает, что личность не установлена."
         ),
     }
 
@@ -125,10 +160,16 @@ def render_person_card(card: dict) -> str:
     def esc(value: Any) -> str:
         return html.escape(str(value)) if value not in (None, "") else "—"
 
-    identity = (
-        f'<div class="hero-name">{esc(card.get("possible_name") or "Личность не установлена")}</div>'
-        f'<div class="confidence">Уверенность ФИО: {int(card.get("name_confidence", 0))}%</div>'
-    )
+    if card.get("possible_name"):
+        identity = (
+            f'<div class="hero-name">{esc(card.get("possible_name"))}</div>'
+            f'<div class="confidence">Уверенность ФИО: {int(card.get("name_confidence", 0))}%</div>'
+        )
+    else:
+        identity = (
+            '<div class="hero-name">ФИО не найдено</div>'
+            '<div class="confidence muted">В открытых источниках нет подтверждённого имени.</div>'
+        )
 
     summary = "".join([
         f'<div class="fact"><span>Телефон</span><strong>{esc(card.get("phone"))}</strong></div>',
@@ -141,8 +182,8 @@ def render_person_card(card: dict) -> str:
     sections = []
     entities = card.get("entities", {})
     order = [
-        "person", "organization", "email", "username", "social_profile",
-        "registered_service", "listing", "document", "domain", "public_address",
+        "person", "email", "username", "social_profile", "registered_service",
+        "organization", "listing", "document", "domain", "public_address",
     ]
     for kind in order:
         items = entities.get(kind, [])
@@ -186,8 +227,8 @@ def render_person_card(card: dict) -> str:
 
     if not sections:
         sections.append(
-            '<section><h2>Открытых связей не найдено</h2>'
-            '<p class="muted">У номера может отсутствовать публичный цифровой след.</p></section>'
+            '<section><h2>Связанные публичные данные не найдены</h2>'
+            '<p class="muted">Для этого номера открытый цифровой след не обнаружен. Это корректный результат, а не ошибка.</p></section>'
         )
 
     return f'''<!doctype html>
