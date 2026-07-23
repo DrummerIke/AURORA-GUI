@@ -44,6 +44,7 @@ install_optional() {
 install_optional "Sherlock" sherlock-project
 install_optional "Maigret" maigret
 install_optional "Holehe" holehe
+install_optional "Socialscan" socialscan
 
 .venv/bin/python -m py_compile app.py phone_engine.py web_search_engine.py aurora/*.py
 chmod +x app.py install.sh run.sh
