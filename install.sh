@@ -29,11 +29,26 @@ if ! python3 -m venv --help >/dev/null 2>&1; then
 fi
 
 python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install --upgrade pip wheel setuptools
 .venv/bin/python -m pip install -r requirements.txt
+
+install_optional() {
+  local label="$1"
+  shift
+  echo "Устанавливаю ${label}..."
+  if ! .venv/bin/python -m pip install "$@"; then
+    echo "[WARN] ${label} не установлен. Aurora продолжит работать без этого модуля."
+  fi
+}
+
+install_optional "Sherlock" sherlock-project
+install_optional "Maigret" maigret
+install_optional "Holehe" holehe
+
 .venv/bin/python -m py_compile app.py phone_engine.py web_search_engine.py aurora/*.py
 chmod +x app.py install.sh run.sh
 
 echo
 echo "AURORA установлена в изолированное окружение."
+echo "Проверка модулей: http://127.0.0.1:8080/modules"
 echo "Запуск: cd ~/AURORA-GUI && ./run.sh"
