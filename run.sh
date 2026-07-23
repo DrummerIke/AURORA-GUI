@@ -7,4 +7,5 @@ if [ ! -x .venv/bin/python ]; then
   exit 1
 fi
 
+export PATH="$PWD/.venv/bin:$PATH"
 exec .venv/bin/python app.py
