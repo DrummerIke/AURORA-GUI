@@ -17,8 +17,8 @@ INDEX_HTML = r'''<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AURORA Control Center</title>
 <style>
-:root{--bg:#0D1113;--panel:#141A1D;--elev:#192125;--line:#2A3338;--text:#F3F5F6;--muted:#9BA8AE;--accent:#EF6F2E;--success:#58D6A9;--warning:#F2C14E;--danger:#FF6B6B}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% 0,#16221f 0,transparent 35%),var(--bg);color:var(--text);font-family:system-ui,sans-serif;min-height:100vh}.shell{max-width:1050px;margin:auto;padding:22px 16px 50px}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}.brand{display:flex;gap:12px;align-items:center}.logo{width:46px;height:46px;border-radius:15px;display:grid;place-items:center;background:#131a19;border:1px solid #31423d;color:var(--accent);font-size:23px}h1{margin:0;letter-spacing:.1em;font-size:22px}.subtitle,.meta{color:var(--muted);font-size:12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}.card,.case{background:rgba(21,26,30,.95);border:1px solid var(--line);border-radius:20px;padding:18px;margin-bottom:14px}.card h2{margin:0 0 8px}.card p{color:var(--muted);line-height:1.5}label{display:block;color:var(--muted);font-size:12px;margin-bottom:7px}input{width:100%;border:1px solid #303941;background:#0e1215;color:var(--text);border-radius:13px;padding:13px 14px;margin-bottom:11px;outline:none}button{width:100%;border:0;border-radius:13px;padding:13px 15px;background:var(--accent);color:#160803;font-weight:800;cursor:pointer}.case-top{display:flex;justify-content:space-between;gap:12px}.name{font-weight:700;word-break:break-word}a{color:var(--accent);text-decoration:none}.running{color:#ffd27d}.done,.ok{color:var(--success)}.error,.missing{color:var(--danger)}.section{margin:24px 0 12px;font-size:14px}.notice{font-size:12px;color:#c4ced3;line-height:1.5}.modules{display:flex;flex-wrap:wrap;gap:8px}.pill{border:1px solid var(--line);border-radius:999px;padding:7px 10px;font-size:12px;background:#0e1215}
+:root{--bg:#0D1113;--panel:#141A1D;--elev:#192125;--line:#2A3338;--text:#F3F5F6;--muted:#9BA8AE;--accent:#EF6F2E;--success:#58D6A9;--warning:#F2C14E;--danger:#FF6B6B;--info:#78A9FF}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% 0,#16221f 0,transparent 35%),var(--bg);color:var(--text);font-family:system-ui,sans-serif;min-height:100vh}.shell{max-width:1050px;margin:auto;padding:22px 16px 50px}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}.brand{display:flex;gap:12px;align-items:center}.logo{width:46px;height:46px;border-radius:15px;display:grid;place-items:center;background:#131a19;border:1px solid #31423d;color:var(--accent);font-size:23px}h1{margin:0;letter-spacing:.1em;font-size:22px}.subtitle,.meta{color:var(--muted);font-size:12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}.card,.case{background:rgba(21,26,30,.95);border:1px solid var(--line);border-radius:20px;padding:18px;margin-bottom:14px}.card h2{margin:0 0 8px}.card p{color:var(--muted);line-height:1.5}label{display:block;color:var(--muted);font-size:12px;margin-bottom:7px}input{width:100%;border:1px solid #303941;background:#0e1215;color:var(--text);border-radius:13px;padding:13px 14px;margin-bottom:11px;outline:none}button{width:100%;border:0;border-radius:13px;padding:13px 15px;background:var(--accent);color:#160803;font-weight:800;cursor:pointer}.case-top{display:flex;justify-content:space-between;gap:12px}.name{font-weight:700;word-break:break-word}a{color:var(--accent);text-decoration:none}.running{color:#ffd27d}.done,.ready{color:var(--success)}.error,.missing,.upstream_broken{color:var(--danger)}.limited,.configuration_required{color:var(--warning)}.section{margin:24px 0 12px;font-size:14px}.notice{font-size:12px;color:#c4ced3;line-height:1.5}.module-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:10px}.module{background:#0e1215;border:1px solid var(--line);border-radius:16px;padding:13px}.module-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.module-name{font-weight:750}.state{font-size:11px;text-transform:uppercase;letter-spacing:.05em}.module-note{color:var(--muted);font-size:12px;line-height:1.4;margin-top:7px}.module-version{color:#75838a;font-size:10px;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.summary{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}.badge{border:1px solid var(--line);border-radius:999px;padding:7px 10px;font-size:12px;background:#0e1215}
 </style></head><body><div class="shell">
 <header><div class="brand"><div class="logo">◈</div><div><h1>AURORA</h1><div class="subtitle">OPEN-SOURCE PERSON INTELLIGENCE</div></div></div><div class="meta">LOCAL CONTROL CENTER</div></header>
 <div class="card notice">AURORA сопоставляет только открыто опубликованные данные. Любое совпадение является исследовательской гипотезой и требует проверки по первоисточнику.</div>
@@ -27,7 +27,14 @@ INDEX_HTML = r'''<!doctype html>
 <div class="card"><h2>Email Intelligence</h2><p>Публичные упоминания email, признаки регистраций и связанные username.</p><form method="post" action="/run/email"><label>Email</label><input name="target" required maxlength="180" inputmode="email" placeholder="name@example.com"><button type="submit">Исследовать email</button></form></div>
 <div class="card"><h2>Username Intelligence</h2><p>Поиск публичных профилей и упоминаний одного псевдонима.</p><form method="post" action="/run/username"><label>Username</label><input name="target" required maxlength="64" placeholder="username"><button type="submit">Исследовать username</button></form></div>
 </div>
-<div class="section">Состояние модулей</div><div class="card modules">{% for module in modules %}<span class="pill {{'ok' if module.installed else 'missing'}}">{{module.name}} · {{'готов' if module.installed else 'не установлен'}}</span>{% endfor %}</div>
+<div class="section">Состояние модулей</div>
+<div class="summary">
+<span class="badge ready">Готово: {{ counts.ready }}</span>
+<span class="badge limited">Ограничено: {{ counts.limited }}</span>
+<span class="badge configuration_required">Требует настройки: {{ counts.configuration_required }}</span>
+<span class="badge missing">Отсутствует: {{ counts.missing }}</span>
+</div>
+<div class="card module-grid">{% for module in modules %}<div class="module"><div class="module-top"><span class="module-name">{{module.name}}</span><span class="state {{module.state}}">{{ labels[module.state] }}</span></div><div class="module-note">{{module.note or module.category}}</div>{% if module.version %}<div class="module-version">{{module.version}}</div>{% endif %}</div>{% endfor %}</div>
 <div class="section">Последние расследования</div>
 {% if recent %}{% for item in recent %}<div class="case"><div class="case-top"><a class="name" href="/job/{{item.id}}">{{item.target}}</a><span class="{{item.status}}">{{item.status|upper}}</span></div><div class="meta">{{item.kind}} · {{item.created}}</div></div>{% endfor %}{% else %}<div class="case meta">Расследований пока нет.</div>{% endif %}
 </div></body></html>'''
@@ -37,7 +44,16 @@ JOB_HTML = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta 
 
 @app.get("/")
 def index():
-    return render_template_string(INDEX_HTML, recent=load_recent(), modules=get_module_status())
+    modules = get_module_status()
+    counts = {state: sum(1 for module in modules if module["state"] == state) for state in ["ready", "limited", "configuration_required", "missing"]}
+    labels = {
+        "ready": "готов",
+        "limited": "ограничен",
+        "configuration_required": "настройка",
+        "missing": "не установлен",
+        "upstream_broken": "сломана сборка",
+    }
+    return render_template_string(INDEX_HTML, recent=load_recent(), modules=modules, counts=counts, labels=labels)
 
 
 def _start(kind: str, target: str):
