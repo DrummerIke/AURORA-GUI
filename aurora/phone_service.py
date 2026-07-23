@@ -6,6 +6,7 @@ from web_search_engine import search_phone
 from .enrichment import enrich_findings
 from .jobs import append_log, finish_job, jobs
 from .person_card import build_person_card
+from .quality_filter import clean_search_result
 
 
 def phone_worker(job_id: str, phone: str) -> None:
@@ -13,14 +14,14 @@ def phone_worker(job_id: str, phone: str) -> None:
     try:
         append_log(job_id, "AURORA Phone Intelligence")
         append_log(job_id, f"Номер: {phone}")
-        append_log(job_id, "[1/4] Анализ номера и региона...")
+        append_log(job_id, "[1/5] Анализ номера и региона...")
 
         report = create_phone_report(phone, case_dir)
         phone_data = report.get("phone", {})
         append_log(job_id, f"Оператор: {phone_data.get('carrier') or 'не определён'}")
         append_log(job_id, f"Регион: {phone_data.get('location') or phone_data.get('region') or 'не определён'}")
 
-        append_log(job_id, "[2/4] Быстрый сбор открытых данных...")
+        append_log(job_id, "[2/5] Быстрый сбор открытых данных...")
         result = search_phone(
             phone=phone_data["e164"],
             variants=report["variants"],
@@ -28,10 +29,17 @@ def phone_worker(job_id: str, phone: str) -> None:
             max_results_per_query=6,
         )
 
-        findings = result.get("findings", [])
-        append_log(job_id, f"Первичных сущностей: {len(findings)}")
+        raw_count = len(result.get("findings", []))
+        append_log(job_id, f"Первичных сущностей до проверки: {raw_count}")
 
-        append_log(job_id, "[3/4] Каскадное обогащение email и username...")
+        append_log(job_id, "[3/5] Отсев ложных ФИО, адресов и телефонных каталогов...")
+        result = clean_search_result(result, case_dir)
+        findings = result.get("findings", [])
+        rejected_count = result.get("quality_filter", {}).get("rejected_count", 0)
+        append_log(job_id, f"Подтверждённых сущностей: {len(findings)}")
+        append_log(job_id, f"Отброшено ложных совпадений: {rejected_count}")
+
+        append_log(job_id, "[4/5] Каскадное обогащение email и username...")
         enrichment = enrich_findings(findings, case_dir)
         module_count = len(enrichment.get("modules", []))
         profile_count = len(enrichment.get("profiles", []))
@@ -40,7 +48,7 @@ def phone_worker(job_id: str, phone: str) -> None:
 
         card = build_person_card(report, result, case_dir, enrichment=enrichment)
 
-        append_log(job_id, "[4/4] Карточка сформирована.")
+        append_log(job_id, "[5/5] Карточка сформирована.")
         if card.get("possible_name"):
             append_log(
                 job_id,
