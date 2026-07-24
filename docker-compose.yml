@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    command: bash scripts/run_local.sh
+    ports: ["127.0.0.1:8080:8080"]
+    env_file: .env.example
+    depends_on: [postgres, redis]
+  postgres:
+    image: postgres:16-alpine
+    environment: {POSTGRES_USER: aurora, POSTGRES_PASSWORD: aurora, POSTGRES_DB: aurora}
+    ports: ["127.0.0.1:5432:5432"]
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:6379:6379"]
