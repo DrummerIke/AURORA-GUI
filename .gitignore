@@ -7,3 +7,7 @@ uploads/
 *.backup_*
 *.log
 .DS_Store
+
+.env
+anomaliiim.txt
+bryanskobl.txt
