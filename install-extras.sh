@@ -22,11 +22,41 @@ install_optional() {
   fi
 }
 
+install_phoneinfoga() {
+  echo
+  echo "Устанавливаю: PhoneInfoga"
+  if [ -x "$VENV/bin/phoneinfoga" ]; then
+    echo "PhoneInfoga уже установлен."
+    return
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "[WARN] curl не найден, PhoneInfoga пропущен."
+    return
+  fi
+
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  if (
+    cd "$tmpdir"
+    bash <(curl -fsSL https://raw.githubusercontent.com/sundowndev/phoneinfoga/master/support/scripts/install)
+  ); then
+    if [ -x "$tmpdir/phoneinfoga" ]; then
+      install -m 755 "$tmpdir/phoneinfoga" "$VENV/bin/phoneinfoga"
+      echo "PhoneInfoga установлен в $VENV/bin/phoneinfoga"
+    else
+      echo "[WARN] Установщик завершился, но бинарник PhoneInfoga не найден."
+    fi
+  else
+    echo "[WARN] Не удалось установить PhoneInfoga для этой архитектуры."
+  fi
+  rm -rf "$tmpdir"
+}
+
 install_optional "sherlock-project"
 install_optional "maigret"
 install_optional "holehe"
+install_phoneinfoga
 
-echo
 cat > "$BASE/run.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -38,8 +68,8 @@ EOF
 chmod +x "$BASE/run.sh" "$BASE/install-extras.sh"
 
 printf '\nУстановленные модули:\n'
-for tool in sherlock maigret holehe; do
-  if [ -x "$VENV/bin/$tool" ]; then
+for tool in sherlock maigret holehe phoneinfoga; do
+  if [ -x "$VENV/bin/$tool" ] || command -v "$tool" >/dev/null 2>&1; then
     printf '  READY   %s\n' "$tool"
   else
     printf '  MISSING %s\n' "$tool"
