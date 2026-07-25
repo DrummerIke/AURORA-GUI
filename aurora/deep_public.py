@@ -114,8 +114,6 @@ def context_around_phone(text: str, phone: str, radius: int = 900) -> str:
     digits = phone_digits(phone)
     compact = re.sub(r"\D", "", text)
     if digits and digits in compact:
-        # Keep a useful bounded page excerpt. Exact mapping from compact digits to
-        # original characters is expensive and brittle, so locate common variants.
         variants = [phone, digits]
         if len(digits) == 11 and digits.startswith("7"):
             variants.extend(["8" + digits[1:], digits[1:]])
@@ -249,3 +247,128 @@ def fetch_phone_linked_pages(
                 future.cancel()
 
     return results
+
+
+def _domain(url: str) -> str:
+    return urlparse(url or "").netloc.casefold().removeprefix("www.")
+
+
+def _known_entity_values(case: dict, entity_type: str) -> set[str]:
+    values: set[str] = set()
+    for entity in case.get("entities", []):
+        if entity.get("type") != entity_type:
+            continue
+        for claim in entity.get("claims", []):
+            value = str(claim.get("normalized_value") or claim.get("value") or "")
+            if value:
+                values.add(value.casefold())
+    return values
+
+
+def _email_entities_from_pages(case: dict, pages: list[dict]) -> list[dict]:
+    grouped: dict[str, list[dict]] = {}
+    for page in pages:
+        values = set(page.get("metadata", {}).get("extracted_emails") or [])
+        values.update(value.casefold() for value in EMAIL_RE.findall(page.get("excerpt", "")))
+        for value in values:
+            grouped.setdefault(value, []).append(page)
+
+    existing = _known_entity_values(case, "email")
+    entities: list[dict] = []
+    for email, items in grouped.items():
+        if email in existing:
+            continue
+        domains = {_domain(item.get("source_url", "")) for item in items}
+        domains.discard("")
+        score = min(88, 68 + max(0, len(domains) - 1) * 10)
+        entities.append(
+            {
+                "id": f"email_page_{hashlib.sha1(email.encode()).hexdigest()[:10]}",
+                "type": "email",
+                "claims": [
+                    {
+                        "field": "email",
+                        "value": email,
+                        "normalized_value": email,
+                        "confidence": score,
+                        "verification_status": (
+                            "Высокая вероятность" if len(domains) >= 2 else "Вероятно"
+                        ),
+                        "source_count": len(items),
+                        "independent_source_count": len(domains),
+                        "evidence_ids": [item["id"] for item in items],
+                        "extraction_method": "phone_linked_public_page",
+                        "reasoning_summary": (
+                            "Email найден на публичной странице, где присутствует "
+                            "исходный номер телефона. Совпадение требует проверки "
+                            "контекста страницы."
+                        ),
+                        "confidence_breakdown": {
+                            "direct_phone_page_match": 55,
+                            "source_reliability": 13,
+                            "independent_confirmation": max(0, len(domains) - 1) * 10,
+                            "final_score": score,
+                        },
+                    }
+                ],
+            }
+        )
+    return entities
+
+
+def enrich_case_with_public_pages(case: dict) -> dict:
+    inp = case.get("input", {})
+    if inp.get("type") != "phone":
+        return case
+
+    phone = inp.get("normalized") or inp.get("raw") or ""
+    pages = fetch_phone_linked_pages(case.get("evidence", []), phone)
+    if pages:
+        seen = {
+            item.get("content_hash") or item.get("id")
+            for item in case.get("evidence", [])
+        }
+        case.setdefault("evidence", []).extend(
+            item
+            for item in pages
+            if (item.get("content_hash") or item.get("id")) not in seen
+        )
+
+    email_entities = _email_entities_from_pages(case, pages)
+    case.setdefault("entities", []).extend(email_entities)
+
+    if email_entities:
+        best = max(
+            email_entities,
+            key=lambda entity: entity["claims"][0].get("confidence", 0),
+        )["claims"][0]
+        case.setdefault("summary", {})["email"] = (
+            f"кандидат: {best['value']} ({best['confidence']}%)"
+        )
+
+    warnings = [] if pages else [
+        "Публичные страницы с точным присутствием номера не найдены или недоступны."
+    ]
+    case.setdefault("connector_runs", []).append(
+        {
+            "connector_id": "deep_public_fetch",
+            "status": "OK",
+            "started_at": "",
+            "completed_at": "",
+            "duration_ms": 0,
+            "entities": email_entities,
+            "evidence": pages,
+            "warnings": warnings,
+            "errors": [],
+            "raw_reference": None,
+            "metadata": {
+                "pages_with_exact_phone": len(pages),
+                "email_candidates": len(email_entities),
+            },
+        }
+    )
+    case.setdefault("summary", {})["deep_public"] = {
+        "pages_with_exact_phone": len(pages),
+        "email_candidates": len(email_entities),
+    }
+    return case
