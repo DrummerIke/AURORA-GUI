@@ -15,7 +15,7 @@ def append_log(job_id: str, text: str) -> None:
         jobs[job_id]["log"] += text.rstrip() + "\n"
 
 
-def create_job(kind: str, target: str) -> str:
+def create_job(kind: str, target: str, *, purpose: str = "authorized_osint_check", consent: bool = False, claimed_name: str = "") -> str:
     job_id = uuid.uuid4().hex[:12]
     case_dir = CASES / job_id
     case_dir.mkdir(parents=True, exist_ok=True)
@@ -24,6 +24,9 @@ def create_job(kind: str, target: str) -> str:
             "id": job_id,
             "kind": kind,
             "target": target,
+            "purpose": purpose,
+            "consent": consent,
+            "claimed_name": claimed_name,
             "status": "running",
             "created": datetime.now().strftime("%d.%m.%Y %H:%M"),
             "log": "",
@@ -43,6 +46,8 @@ def finish_job(job_id: str, status: str = "done") -> None:
             "target": job["target"],
             "status": status,
             "created": job["created"],
+            "purpose": job.get("purpose", ""),
+            "consent": bool(job.get("consent")),
         }
     manifest["files"] = sorted(p.name for p in case_dir.iterdir() if p.is_file())
     (case_dir / "case.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
