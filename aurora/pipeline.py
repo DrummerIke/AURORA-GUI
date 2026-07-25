@@ -22,8 +22,10 @@ from phonenumbers import carrier, geocoder, timezone as phtz
 STATUSES={"OK","ERROR","TIMEOUT","CONFIGURATION_REQUIRED","RATE_LIMITED","DISABLED"}
 PHONE_STOPLIST={"ваше имя","главная коды","если вам","комментарий имя тип","мошенники","мошенники реклама коллекторы","кто звонил","не бери трубку","обратная связь","пользовательское соглашение","privacy policy","sign in","your name","home codes","submit comment","who called","do not answer","menu","login","register","search","contact us","advertisement","breadcrumbs","личный кабинет","читать далее","оставить отзыв","номер телефона","политика конфиденциальности","показать ещё","похожие номера","телефонный справочник","служба поддержки","имя пользователя","first name","last name","learn more","read more","customer service","phone number","cookie policy","terms of use"}
 LOW_TRUST_PHONE_DOMAINS={"baza-nomerov.com","centerica.ru","kodtelefona.ru","mobile-monitor.ru","phoneradar.ru","region-operator.ru","spravochnik.tel","who-call.me","zvonok24.ru","numbase.ru","nomercheck.ru","truecaller.com","numlookup.com","findwhocallsyou.com"}
+ORG_STOPWORDS={"телефон","номер","контакты","отзывы","адрес","сайт","главная","реклама","звонок","поиск","phone","contact","reviews","website","home"}
 EMAIL_RE=re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 PERSON_RE=re.compile(r"\b([А-ЯЁ][а-яё-]{1,30}\s+[А-ЯЁ][а-яё-]{1,30}(?:\s+[А-ЯЁ][а-яё-]{1,30}){0,2})\b")
+ORG_RE=re.compile(r"\b((?:ООО|ПАО|АО|АНО|НКО|ИП)\s+(?:[«\"][^»\"]{2,100}[»\"]|[А-ЯЁA-Z][А-ЯЁA-Za-zа-яё0-9 .&_-]{2,100}))")
 USERNAME_RE=re.compile(r"^@?[A-Za-z0-9_.-]{3,64}$")
 
 @dataclass
@@ -233,9 +235,14 @@ class EntityResolver:
         phone_claim=EntityClaim('phone' if inp['type']=='phone' else inp['type'], inp['normalized'], inp['normalized'], 90 if inp.get('valid') else 40, 'Подтверждено' if inp.get('valid') else 'Гипотеза',1,1,[e['id'] for e in evidence[:1]],extraction_method='input_normalizer',reasoning_summary='Исходный идентификатор нормализован.')
         entities=[Entity('entity_input', 'phone' if inp['type']=='phone' else inp['type'], [phone_claim])]
         # Conservative: only parse emails from evidence; names require strict context + independent trusted source
-        by_email={}; by_person={}
+        by_email={}; by_person={}; by_org={}
         for ev in evidence:
             for em in EMAIL_RE.findall(ev.get('excerpt','')): by_email.setdefault(em.casefold(), {"value":em,"evidence":[]})['evidence'].append(ev)
+            for org in ORG_RE.findall(ev.get('excerpt','')):
+                org_words={word.casefold() for word in re.findall(r"[А-ЯЁа-яёA-Za-z]+",org)}
+                if not (org_words & ORG_STOPWORDS) and identifier_in_context(input_value,ev.get('excerpt','')+ev.get('title','')) and domain(ev.get('source_url','')) not in LOW_TRUST_PHONE_DOMAINS:
+                    normalized=re.sub(r"\s+"," ",org).strip().casefold()
+                    by_org.setdefault(normalized,{"value":re.sub(r"\s+"," ",org).strip(),"evidence":[]})['evidence'].append(ev)
             for nm in PERSON_RE.findall(ev.get('excerpt','')):
                 ok,reason=filt.valid_person(nm,[ev],input_value)
                 if not ok: rejected.append(asdict(RejectedCandidate(nm,'person',reason,ev.get('source_url',''),ev.get('excerpt','')[:250])))
@@ -250,12 +257,21 @@ class EntityResolver:
             status='Подтверждено' if score['final_score']>=80 else 'Вероятно' if score['final_score']>=60 else 'Гипотеза'
             reason='Заявленное ФИО совпало с публичным контекстом номера.' if claimed and key==claimed else 'ФИО встречается рядом с номером в независимых публичных источниках.'
             entities.append(Entity('person_'+hashlib.sha1(key.encode()).hexdigest()[:8],'person',[EntityClaim('full_name',item['value'],key,score['final_score'],status,len(ents),inds,[e['id'] for e in ents],extraction_method='context_consensus',reasoning_summary=reason,confidence_breakdown=score)]))
+        for key,item in by_org.items():
+            ents=item['evidence']; inds=independent_source_count(ents); trusted=any(e.get('reliability',0)>=.8 for e in ents)
+            if inds < 2 and not trusted:
+                rejected.append(asdict(RejectedCandidate(item['value'],'organization','insufficient_independent_confirmation',ents[0].get('source_url',''),ents[0].get('excerpt','')[:250]))); continue
+            score=ConfidenceScorer().score(True,sum(e.get('reliability',.5) for e in ents)/len(ents),inds,.8,[])
+            entities.append(Entity('org_'+hashlib.sha1(key.encode()).hexdigest()[:8],'organization',[EntityClaim('legal_name',item['value'],key,score['final_score'],'Подтверждено' if score['final_score']>=80 else 'Вероятно',len(ents),inds,[e['id'] for e in ents],extraction_method='context_consensus',reasoning_summary='Организация опубликована рядом с исходным номером и подтверждена независимыми источниками.',confidence_breakdown=score)]))
         for item in by_email.values():
             ok,reason=filt.valid_email(item['value'],item['evidence'],input_value)
             if not ok: rejected.append(asdict(RejectedCandidate(item['value'],'email',reason,item['evidence'][0].get('source_url',''),item['evidence'][0].get('excerpt','')[:250]))); continue
             ents=item['evidence']; inds=independent_source_count(ents); score=ConfidenceScorer().score(True, sum(e.get('reliability',.5) for e in ents)/len(ents), inds, .8, [])
             entities.append(Entity('email_'+hashlib.sha1(item['value'].encode()).hexdigest()[:8], 'email', [EntityClaim('email',item['value'],item['value'].casefold(),score['final_score'],'Вероятно' if score['final_score']>=60 else 'Гипотеза',len(ents),inds,[e['id'] for e in ents],extraction_method='content_context',reasoning_summary='Email найден в контексте исходного идентификатора.',confidence_breakdown=score)]))
-        return [asdict(e) for e in entities], evidence, rejected
+        relationships=[]
+        for entity in entities[1:]:
+            relationships.append({"source_entity_id":"entity_input","target_entity_id":entity.id,"type":"public_context_match","verification_status":entity.claims[0].verification_status,"evidence_ids":entity.claims[0].evidence_ids})
+        return [asdict(e) for e in entities], evidence, rejected, relationships
 class ConfidenceScorer:
     def score(self, exact, reliability, independent, context, penalties):
         d={"base_score":35 if exact else 15,"source_reliability":round(reliability*25),"independent_confirmation":min(20, max(0,independent-1)*10),"context_strength":round(context*15),"recency":5,"penalties":penalties}; d['final_score']=max(1,min(95,d['base_score']+d['source_reliability']+d['independent_confirmation']+d['context_strength']+d['recency']-sum(penalties or []))); return d
@@ -264,5 +280,5 @@ class SummaryGenerator:
         has_email=any(e['type']=='email' for e in entities); has_person=any(e['type']=='person' for e in entities)
         return {"headline":"Проверка завершена: показаны только связи с сохранённым контекстом; каталоги и шаблонные фразы не считаются доказательством личности.","fio":"не подтверждено" if not has_person else "см. подтвержденные сущности","email":"не подтвержден" if not has_email else "см. подтвержденные сущности","connector_statuses":[{"id":r['connector_id'],"status":r['status'],"warnings":r.get('warnings',[])} for r in runs],"rejected_count":len(rejected)}
 async def run_pipeline(raw:str, case_id:str='case', *, claimed_name:str='', purpose:str='authorized_osint_check', consent:bool=False)->SearchCase:
-    it=InputClassifier().classify(raw); inp=InputNormalizer().normalize(raw,it); inp['claimed_name']=claimed_name.strip(); cfg=load_cfg(); conns=SearchPlanner(cfg).connectors_for(it); runs=await ConnectorOrchestrator(conns,cfg.get('concurrency',6)).run(inp); entities,evidence,rejected=EntityResolver().resolve(inp,runs); summary=SummaryGenerator().build(inp,entities,runs,rejected); return SearchCase(case_id,inp,runs,entities,evidence,rejected,summary,purpose=purpose,consent=consent)
+    it=InputClassifier().classify(raw); inp=InputNormalizer().normalize(raw,it); inp['claimed_name']=claimed_name.strip(); cfg=load_cfg(); conns=SearchPlanner(cfg).connectors_for(it); runs=await ConnectorOrchestrator(conns,cfg.get('concurrency',6)).run(inp); entities,evidence,rejected,relationships=EntityResolver().resolve(inp,runs); summary=SummaryGenerator().build(inp,entities,runs,rejected); return SearchCase(case_id,inp,runs,entities,evidence,rejected,summary,relationships,purpose,consent)
 def run_pipeline_sync(raw:str, case_id:str='case', **kwargs)->dict: return asdict(asyncio.run(run_pipeline(raw,case_id,**kwargs)))
