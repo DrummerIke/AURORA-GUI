@@ -17,6 +17,29 @@ STATUS_CLASS = {
     "conflict": "conflict",
     "insufficient": "insufficient",
 }
+UNAVAILABLE_STATUSES = {"CONFIGURATION_REQUIRED", "DISABLED"}
+
+
+def _source_card(run: dict) -> str:
+    details = "; ".join(run.get("warnings") or run.get("errors") or [])
+    metadata = run.get("metadata") or {}
+    counters = []
+    if "pages_with_exact_phone" in metadata:
+        counters.append(
+            f"страниц с точным номером: {metadata['pages_with_exact_phone']}"
+        )
+    if "email_candidates" in metadata:
+        counters.append(f"email-кандидатов: {metadata['email_candidates']}")
+    if counters:
+        details = "; ".join(filter(None, [details, ", ".join(counters)]))
+    return (
+        "<div class='source'>"
+        f"<span>{esc(run['connector_id'])}</span>"
+        f"<b class='{esc(run['status']).lower()}'>"
+        f"{esc(run['status'])}</b>"
+        f"<small>{esc(details)}</small>"
+        "</div>"
+    )
 
 
 def render_report(case: dict, output_dir: Path) -> None:
@@ -33,6 +56,7 @@ def render_report(case: dict, output_dir: Path) -> None:
     runs = case["connector_runs"]
     rejected = case["rejected_candidates"]
     verification = summary.get("context_verification", [])
+    deep_stats = summary.get("deep_public", {})
 
     entity_cards = []
     for entity in entities:
@@ -89,15 +113,14 @@ def render_report(case: dict, output_dir: Path) -> None:
         for item in evidence[:40]
     )
 
-    run_html = "".join(
-        "<div class='source'>"
-        f"<span>{esc(run['connector_id'])}</span>"
-        f"<b class='{esc(run['status']).lower()}'>"
-        f"{esc(run['status'])}</b>"
-        f"<small>{esc('; '.join(run.get('warnings') or run.get('errors') or []))}</small>"
-        "</div>"
-        for run in runs
-    )
+    active_runs = [
+        run for run in runs if run.get("status") not in UNAVAILABLE_STATUSES
+    ]
+    unavailable_runs = [
+        run for run in runs if run.get("status") in UNAVAILABLE_STATUSES
+    ]
+    active_run_html = "".join(_source_card(run) for run in active_runs)
+    unavailable_run_html = "".join(_source_card(run) for run in unavailable_runs)
 
     rejected_html = "".join(
         f"<li><b>{esc(item['kind'])}</b>: {esc(item['value'])} — "
@@ -119,6 +142,32 @@ def render_report(case: dict, output_dir: Path) -> None:
         f"<tbody>{''.join(verification_rows)}</tbody>"
         "</table></div></section>"
         if verification_rows
+        else ""
+    )
+
+    deep_section = (
+        "<section class='card'>"
+        "<h2>Глубокая проверка публичных страниц</h2>"
+        "<div class='grid'>"
+        "<div class='fact'><span>Страницы с точным номером</span>"
+        f"<strong>{esc(deep_stats.get('pages_with_exact_phone', 0))}</strong></div>"
+        "<div class='fact'><span>Email-кандидаты на этих страницах</span>"
+        f"<strong>{esc(deep_stats.get('email_candidates', 0))}</strong></div>"
+        "</div>"
+        "<p class='muted'>AURORA открывает доступные результаты поиска и "
+        "учитывает сущности только там, где номер присутствует непосредственно "
+        "в тексте публичной страницы.</p>"
+        "</section>"
+    )
+
+    unavailable_section = (
+        "<details>"
+        "<summary>Источники, которые пока не подключены</summary>"
+        "<p class='muted'>Они не участвовали в результате и не должны "
+        "восприниматься как проверенные.</p>"
+        f"{unavailable_run_html}"
+        "</details>"
+        if unavailable_run_html
         else ""
     )
 
@@ -254,6 +303,7 @@ ul{{padding-left:20px}}
     <div class="fact"><span>Email</span><strong>{esc(summary['email'])}</strong></div>
   </div>
 </header>
+{deep_section}
 {verification_section}
 <section class='card'>
   <h2>Подтверждённые и проверяемые сущности</h2>
@@ -270,17 +320,14 @@ ul{{padding-left:20px}}
   для которых сохранены доказательства и контекст.</p>
 </section>
 <section class='card'>
-  <h2>Хронология</h2>
-  <p class='muted'>Время получения доказательств указано в JSON-отчёте.</p>
-</section>
-<section class='card'>
   <h2>Доказательства</h2>
   {evidence_html or '<p class="muted">Доказательства не найдены.</p>'}
 </section>
 <section class='card'>
-  <h2>Проверенные источники</h2>
-  {run_html}
+  <h2>Источники, реально участвовавшие в проверке</h2>
+  {active_run_html or '<p class="muted">Нет успешно запущенных источников.</p>'}
 </section>
+{unavailable_section}
 <details>
   <summary>Отброшенные совпадения — технический блок</summary>
   <ul>{rejected_html or '<li>Нет отброшенных кандидатов.</li>'}</ul>
