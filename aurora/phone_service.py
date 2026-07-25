@@ -1,5 +1,6 @@
 from pathlib import Path
 from .jobs import append_log, finish_job, jobs
+from .audit_log import append_audit
 from .pipeline import run_pipeline_sync, mask_sensitive
 from .report_renderer import render_report
 
@@ -17,6 +18,8 @@ def phone_worker(job_id: str, phone: str, claimed_name: str = "", purpose: str =
         append_log(job_id, f"ФИО: {case['summary']['fio']}")
         append_log(job_id, f"Email: {case['summary']['email']}")
         finish_job(job_id)
+        append_audit("search_completed", {"job_id": job_id, "status": "done", "entity_count": len(case.get('entities', [])), "evidence_count": len(case.get('evidence', []))})
     except Exception as exc:
         append_log(job_id, f"[FATAL] {mask_sensitive(str(exc))}")
         finish_job(job_id, "error")
+        append_audit("search_completed", {"job_id": job_id, "status": "error"})

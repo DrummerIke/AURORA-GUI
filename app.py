@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+import hashlib
+import hmac
+import os
 import threading
 
 from flask import Flask, jsonify, redirect, render_template_string, request, send_from_directory, url_for
@@ -7,11 +10,29 @@ from waitress import serve
 from werkzeug.utils import secure_filename
 
 from aurora.identity_service import identity_worker
+from aurora.audit_log import append_audit
 from aurora.jobs import create_job, jobs, load_recent
 from aurora.module_status import get_module_status
 from aurora.phone_service import phone_worker
 
 app = Flask(__name__)
+
+
+@app.before_request
+def require_authentication():
+    expected = os.getenv("AURORA_AUTH_TOKEN", "")
+    expected_user = os.getenv("AURORA_AUTH_USERNAME", "")
+    expected_password = os.getenv("AURORA_AUTH_PASSWORD", "")
+    if not expected and not (expected_user and expected_password):
+        return None
+    supplied = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    bearer_ok = bool(expected) and hmac.compare_digest(supplied, expected)
+    basic = request.authorization
+    basic_ok = bool(basic and expected_user and expected_password and hmac.compare_digest(basic.username or "", expected_user) and hmac.compare_digest(basic.password or "", expected_password))
+    if not (bearer_ok or basic_ok):
+        append_audit("authentication_failed", {"path": request.path, "remote": request.remote_addr or ""})
+        return jsonify({"error": "authentication required"}), 401, {"WWW-Authenticate": 'Basic realm="AURORA"'}
+    return None
 
 INDEX_HTML = r'''<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -52,6 +73,7 @@ def _start(kind: str, target: str):
     job_id = create_job(f"{kind.title()} Intelligence", target, purpose=purpose, consent=consent, claimed_name=claimed_name)
     worker = phone_worker if kind == "phone" else identity_worker
     args = (job_id, target, claimed_name, purpose, consent) if kind == "phone" else (job_id, kind, target)
+    append_audit("search_started", {"job_id": job_id, "kind": kind, "purpose": purpose, "consent": consent, "target_sha256": hashlib.sha256(target.encode()).hexdigest()})
     threading.Thread(target=worker, args=args, daemon=True).start()
     return redirect(url_for("job_page", job_id=job_id))
 

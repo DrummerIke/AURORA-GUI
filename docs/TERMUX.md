@@ -70,3 +70,36 @@ python scripts/doctor.py
 ```
 
 Старые кейсы останутся в `~/AURORA-GUI/cases/`. Новый формат применяется к новым проверкам; для старого кейса нужно повторно запустить поиск с законным основанием и, при наличии, заявленным кандидатом ФИО.
+
+## Новые переменные после Search/Security обновления
+
+Скопируйте `.env.example` в локальный `.env` и заполните минимум Search Provider:
+
+```bash
+cd ~/AURORA-GUI
+cp -n .env.example .env
+nano .env
+```
+
+Минимально:
+
+```dotenv
+AURORA_SEARCH_PROVIDER=brave
+BRAVE_SEARCH_API_KEY=полученный_ключ
+```
+
+Для защищённого браузерного доступа задайте HTTP Basic:
+
+```dotenv
+AURORA_AUTH_USERNAME=aurora
+AURORA_AUTH_PASSWORD=длинный_уникальный_пароль
+AURORA_AUDIT_HMAC_KEY=случайная_строка_не_короче_32_байт
+```
+
+Опционально: `ALEPH_API_KEY`, `OPENSANCTIONS_API_KEY`. Полную загрузку страниц включайте только после обновления кода: `AURORA_FETCH_CONTENT=true`.
+
+`run.sh` автоматически загружает локальный `.env`. Запуск:
+
+```bash
+./run.sh
+```

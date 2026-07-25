@@ -35,12 +35,15 @@ AURORA не интегрирует «Глаз Бога», нелегальные
 
 ## Приоритет следующей реализации
 
-1. Search Provider interface с официальным API и сохранением provider result ID.
-2. Безопасный ContentFetcher с SSRF-защитой, DNS pinning, лимитом размера, MIME allowlist и retention.
-3. OrganizationResolver: название, ИНН/ОГРН, официальный сайт и роль человека — только по документному контексту.
-4. Адаптер Aleph для уже известного ФИО/организации и разрешённого purpose.
-5. Адаптер OpenSanctions для отдельного compliance-этапа; совпадение по одному имени должно оставаться гипотезой.
-6. Entity graph с типизированными отношениями и evidence на каждом ребре.
-7. PostgreSQL/Redis worker, повтор неуспешных источников, authentication и immutable audit log перед многопользовательским deployment.
+Реализованы Brave Search provider, защищённый ContentFetcher, базовый OrganizationResolver, Aleph/OpenSanctions adapters, evidence-рёбра графа, опциональная authentication и tamper-evident audit chain.
+
+Следующие задачи:
+
+1. Сохранять provider result ID и архивную копию в рамках retention policy.
+2. Обогащать организацию по официальному реестру после проверки лицензии и API-договора.
+3. Добавить отдельную форму проверки известного ФИО/организации с датой рождения/страной/регистрационным номером для безопасного compliance matching.
+4. Мигрировать job registry в PostgreSQL и после этого включить Redis worker/retry неуспешных источников.
+5. Вывести audit в WORM/object-lock storage или отдельный append-only database sink: локальная HMAC-цепочка выявляет изменение, но не предотвращает удаление файла.
+6. Добавить полноценную ролевую модель пользователей и CSRF-защиту перед сетевым deployment.
 
 Ни один будущий адаптер не считается подключённым, пока нет контрактных тестов ответа, обработки 401/429/timeout и документированной лицензии/ToS.

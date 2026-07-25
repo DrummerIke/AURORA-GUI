@@ -1,5 +1,8 @@
 import asyncio, os
-from aurora.pipeline import InputClassifier, InputNormalizer, CandidateFilter, ConfidenceScorer, EntityResolver, mask_sensitive, BaseConnector, ConnectorResult, independent_source_count
+import pytest
+from aurora.content_fetcher import UnsafeUrlError, fetch_url
+import aurora.audit_log as audit_log
+from aurora.pipeline import InputClassifier, InputNormalizer, CandidateFilter, ConfidenceScorer, EntityResolver, mask_sensitive, BaseConnector, ConnectorResult, OpenSanctionsConnector, independent_source_count, valid_inn, valid_ogrn
 from aurora.report_renderer import build_report_view, render_report
 
 def test_classification():
@@ -42,6 +45,15 @@ def test_template_organization_phrase_is_not_promoted():
     evidence=[{'id':'x','source':'web','source_url':'https://example.test/x','source_type':'search_result','excerpt':'ООО Ромашка телефон +79991234567','title':'Поиск','reliability':.9,'content_hash':'x'}]
     entities, _, _, _=EntityResolver().resolve({'type':'phone','normalized':'+79991234567','valid':True,'claimed_name':''},[{'evidence':evidence}])
     assert not [item for item in entities if item['type']=='organization']
+def test_russian_registration_number_checksums():
+    assert valid_inn('7707083893') and not valid_inn('7707083894')
+    assert valid_ogrn('1027700132195') and not valid_ogrn('1027700132196')
+def test_content_fetcher_blocks_loopback():
+    with pytest.raises(UnsafeUrlError): fetch_url('http://127.0.0.1/private')
+def test_opensanctions_refuses_name_only(monkeypatch):
+    monkeypatch.setenv('OPENSANCTIONS_API_KEY','synthetic')
+    result=asyncio.run(OpenSanctionsConnector().run({'type':'person_name','normalized':'Иванов Иван Иванович'}))
+    assert result.status=='INSUFFICIENT_INPUT' and not result.evidence
 def test_cloned_sources_are_not_independent():
     evidence=[
         {'source_url':'https://clone-a.example/x','content_hash':'same'},
@@ -52,16 +64,29 @@ def test_phone_route_requires_consent():
     from app import app
     client=app.test_client()
     assert client.post('/run/phone',data={'target':'+79991234567'}).status_code==400
+def test_optional_bearer_auth(monkeypatch):
+    from app import app
+    monkeypatch.setenv('AURORA_AUTH_TOKEN','synthetic-token')
+    client=app.test_client()
+    assert client.get('/').status_code==401
+    assert client.get('/',headers={'Authorization':'Bearer synthetic-token'}).status_code==200
+def test_tamper_evident_audit_chain(tmp_path,monkeypatch):
+    monkeypatch.setattr(audit_log,'_AUDIT_PATH',tmp_path/'audit.jsonl')
+    monkeypatch.setenv('AURORA_AUDIT_HMAC_KEY','synthetic-key')
+    first=audit_log.append_audit('first',{'job_id':'synthetic'})
+    second=audit_log.append_audit('second',{'job_id':'synthetic'})
+    assert second['previous_hash']==first['hash'] and second['hash']!=first['hash']
 def test_executive_report_prioritizes_conclusions(tmp_path):
     case={'id':'synthetic','input':{'type':'phone','raw':'+79991234567','normalized':'+79991234567','claimed_name':'Иванов Иван Иванович'},'purpose':'employment_due_diligence','consent':True,
           'entities':[{'id':'person1','type':'person','claims':[{'field':'full_name','value':'Иванов Иван Иванович','confidence':82,'verification_status':'Подтверждено','source_count':2,'independent_source_count':2,'evidence_ids':['e1'],'reasoning_summary':'Подтверждено синтетическими источниками.','confidence_breakdown':{}}]}],
           'evidence':[{'id':'e1','source':'synthetic','source_url':'https://example.test/evidence','source_type':'web','title':'Синтетическое доказательство','excerpt':'Тестовый контекст','retrieved_at':'2026-01-01'}],
-          'connector_runs':[{'connector_id':'synthetic','status':'OK'}],'rejected_candidates':[],'relationships':[],'summary':{}}
+          'connector_runs':[{'connector_id':'synthetic','status':'OK'}],'rejected_candidates':[],'relationships':[{'source_entity_id':'entity_input','target_entity_id':'person1','type':'public_context_match','verification_status':'Подтверждено','evidence_ids':['e1']}],'summary':{}}
     view=build_report_view(case); assert view['subject']=='Иванов Иван Иванович'
     render_report(case,tmp_path); report=(tmp_path/'report.html').read_text()
     assert report.index('Главные выводы') < report.index('Доказательства выводов')
     assert 'Компании и профессиональные связи' in report and 'Техническое состояние источников' in report
-    assert '@media (max-width:680px)' in report and 'grid-template-columns:1fr' in report
+    assert 'Карта доказанных связей' in report and 'evidence на ребре: 1' in report
+    assert '@media screen and (max-width:680px)' in report and 'grid-template-columns:1fr' in report
 class OkConnector(BaseConnector):
     id='ok'; supported_input_types=['phone']
     async def search(self,inp): return ConnectorResult(self.id,'OK','','',0,evidence=[{'id':'e','source':'t'}])

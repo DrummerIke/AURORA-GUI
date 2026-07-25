@@ -8,4 +8,10 @@ if [ ! -x .venv/bin/python ]; then
 fi
 
 export PATH="$PWD/.venv/bin:$PATH"
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
 exec .venv/bin/python app.py

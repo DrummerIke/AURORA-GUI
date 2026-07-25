@@ -43,7 +43,9 @@ def _claims(case: dict, entity_type: str) -> list[dict]:
 def build_report_view(case: dict) -> dict:
     inp = case["input"]
     people = _claims(case, "person")
-    organizations = _claims(case, "organization")
+    organization_claims = _claims(case, "organization")
+    organizations = [claim for claim in organization_claims if claim.get("field") == "legal_name"]
+    organization_details = [claim for claim in organization_claims if claim.get("field") != "legal_name"]
     contacts = _claims(case, "phone") + _claims(case, "email") + _claims(case, "username")
     profiles = _claims(case, "social_profile")
     runs = case.get("connector_runs", [])
@@ -86,6 +88,7 @@ def build_report_view(case: dict) -> dict:
         "conclusions": conclusions,
         "people": people,
         "organizations": organizations,
+        "organization_details": organization_details,
         "contacts": contacts,
         "profiles": profiles,
         "relationships": case.get("relationships", []),
@@ -128,6 +131,7 @@ def render_report(case: dict, output_dir: Path) -> None:
 
     people_html = "".join(_claim_card(claim, "ФИО") for claim in view["people"])
     org_html = "".join(_claim_card(claim, "Компания / организация") for claim in view["organizations"])
+    org_html += "".join(_claim_card(claim, {"inn":"ИНН","ogrn":"ОГРН / ОГРНИП","official_website":"Официальный сайт","role":"Роль"}.get(claim.get("field"),"Реквизит")) for claim in view["organization_details"])
     contact_html = "".join(_claim_card(claim, ENTITY_LABELS.get(claim.get("field"), claim.get("field", "Контакт"))) for claim in view["contacts"])
     profile_html = "".join(_claim_card(claim, "Публичный профиль") for claim in view["profiles"])
     conclusions = "".join(f"<li>{esc(item)}</li>" for item in view["conclusions"])
@@ -144,6 +148,16 @@ def render_report(case: dict, output_dir: Path) -> None:
         f"<a class='source-link' href='{esc(item.get('source_url'))}' target='_blank' rel='noopener noreferrer'>Первоисточник ↗</a></article>"
         for item in evidence_items[:50]
     )
+    entity_labels = {"entity_input": inp.get("normalized")}
+    for entity in case.get("entities", []):
+        claims = entity.get("claims", [])
+        if claims:
+            entity_labels[entity.get("id")] = claims[0].get("value")
+    graph_html = "".join(
+        f"<article class='evidence'><div><span class='eyebrow'>{esc(edge.get('type'))}</span><h3>{esc(entity_labels.get(edge.get('source_entity_id')))} → {esc(entity_labels.get(edge.get('target_entity_id')))}</h3>"
+        f"<p>Статус связи: {esc(edge.get('verification_status'))}; evidence на ребре: {esc(len(edge.get('evidence_ids', [])))}</p></div></article>"
+        for edge in view["relationships"]
+    )
     run_html = "".join(
         f"<div class='connector'><span>{esc(run.get('connector_id'))}</span><b class='{esc(run.get('status', '')).lower()}'>{esc(run.get('status'))}</b>"
         f"<small>{esc('; '.join(run.get('warnings') or run.get('errors') or []))}</small></div>"
@@ -157,12 +171,13 @@ def render_report(case: dict, output_dir: Path) -> None:
     status_class = STATUS_CLASS.get(view["identity_status"], "unconfirmed")
 
     document = f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AURORA — сводный отчёт</title><style>
-:root{{--bg:#0D1113;--surface:#141A1D;--elev:#192125;--border:#2A3338;--text:#F3F5F6;--muted:#9BA8AE;--accent:#EF6F2E;--success:#58D6A9;--warning:#F2C14E;--danger:#FF6B6B}}*{{box-sizing:border-box}}body{{margin:0;background:radial-gradient(circle at 80% 0,#262018 0,transparent 30%),var(--bg);color:var(--text);font:15px/1.5 Inter,system-ui,sans-serif}}main{{max-width:1120px;margin:auto;padding:20px 14px 56px}}.hero,.panel{{background:rgba(20,26,29,.97);border:1px solid var(--border);border-radius:22px;padding:22px;margin:14px 0}}.hero{{background:linear-gradient(135deg,#1d2426,#141a1d)}}.topline,.section-title,.claim,.evidence,.connector{{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}}.eyebrow{{color:var(--accent);font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}}h1{{font-size:clamp(27px,5vw,44px);line-height:1.08;margin:10px 0}}h2{{font-size:19px;margin:0}}h3{{margin:5px 0;font-size:17px}}p,small{{color:var(--muted)}}.status{{display:inline-flex;padding:7px 10px;border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap}}.confirmed{{color:var(--success);background:#142d28}}.probable{{color:#b6efd9;background:#19312c}}.hypothesis,.configuration_required,.timeout,.rate_limited{{color:var(--warning);background:#302817}}.unconfirmed{{color:var(--muted);background:#232a2e}}.conflict,.error{{color:var(--danger);background:#321c1f}}.summary-grid{{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-top:18px}}.summary-card{{background:var(--elev);border:1px solid var(--border);border-radius:17px;padding:16px}}ul{{margin:8px 0;padding-left:20px}}li{{margin:7px 0}}.claim,.evidence{{padding:16px 0;border-top:1px solid var(--border)}}.claim:first-of-type,.evidence:first-of-type{{border-top:0}}.claim>div,.evidence>div{{min-width:0}}.source-link{{color:var(--accent);text-decoration:none;white-space:nowrap}}.empty{{color:var(--muted);background:var(--elev);border:1px dashed var(--border);border-radius:15px;padding:17px;margin-top:15px}}.connector{{display:grid;grid-template-columns:1fr auto;gap:5px;padding:11px 0;border-top:1px solid var(--border)}}.connector small{{grid-column:1/-1;overflow-wrap:anywhere}}.ok{{color:var(--success)}}details{{margin-top:10px}}summary{{color:var(--accent);cursor:pointer;min-height:36px}}.technical{{background:#101517}}a{{overflow-wrap:anywhere}}@media (max-width:680px){{main{{padding:8px 8px 34px}}.hero,.panel{{border-radius:16px;padding:15px}}.summary-grid{{grid-template-columns:1fr}}.topline,.claim,.evidence{{display:block}}.status,.source-link{{margin-top:10px}}.source-link{{display:inline-block;min-height:44px;padding-top:10px}}h1{{font-size:29px}}}}
+:root{{--bg:#0D1113;--surface:#141A1D;--elev:#192125;--border:#2A3338;--text:#F3F5F6;--muted:#9BA8AE;--accent:#EF6F2E;--success:#58D6A9;--warning:#F2C14E;--danger:#FF6B6B}}*{{box-sizing:border-box}}body{{margin:0;background:radial-gradient(circle at 80% 0,#262018 0,transparent 30%),var(--bg);color:var(--text);font:15px/1.5 Inter,system-ui,sans-serif}}main{{max-width:1120px;margin:auto;padding:20px 14px 56px}}.hero,.panel{{background:rgba(20,26,29,.97);border:1px solid var(--border);border-radius:22px;padding:22px;margin:14px 0}}.hero{{background:linear-gradient(135deg,#1d2426,#141a1d)}}.topline,.section-title,.claim,.evidence,.connector{{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}}.eyebrow{{color:var(--accent);font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}}h1{{font-size:clamp(27px,5vw,44px);line-height:1.08;margin:10px 0}}h2{{font-size:19px;margin:0}}h3{{margin:5px 0;font-size:17px}}p,small{{color:var(--muted)}}.status{{display:inline-flex;padding:7px 10px;border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap}}.confirmed{{color:var(--success);background:#142d28}}.probable{{color:#b6efd9;background:#19312c}}.hypothesis,.configuration_required,.timeout,.rate_limited{{color:var(--warning);background:#302817}}.unconfirmed{{color:var(--muted);background:#232a2e}}.conflict,.error{{color:var(--danger);background:#321c1f}}.summary-grid{{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-top:18px}}.summary-card{{background:var(--elev);border:1px solid var(--border);border-radius:17px;padding:16px}}ul{{margin:8px 0;padding-left:20px}}li{{margin:7px 0}}.claim,.evidence{{padding:16px 0;border-top:1px solid var(--border)}}.claim:first-of-type,.evidence:first-of-type{{border-top:0}}.claim>div,.evidence>div{{min-width:0}}.source-link{{color:var(--accent);text-decoration:none;white-space:nowrap}}.empty{{color:var(--muted);background:var(--elev);border:1px dashed var(--border);border-radius:15px;padding:17px;margin-top:15px}}.connector{{display:grid;grid-template-columns:1fr auto;gap:5px;padding:11px 0;border-top:1px solid var(--border)}}.connector small{{grid-column:1/-1;overflow-wrap:anywhere}}.ok{{color:var(--success)}}details{{margin-top:10px}}summary{{color:var(--accent);cursor:pointer;min-height:36px}}.technical{{background:#101517}}a{{overflow-wrap:anywhere}}@media screen and (max-width:680px){{main{{padding:8px 8px 34px}}.hero,.panel{{border-radius:16px;padding:15px}}.summary-grid{{grid-template-columns:1fr}}.topline,.claim,.evidence{{display:block}}.status,.source-link{{margin-top:10px}}.source-link{{display:inline-block;min-height:44px;padding-top:10px}}h1{{font-size:29px}}}}
 </style></head><body><main><header class="hero"><div class="topline"><span class="eyebrow">AURORA · сводный отчёт</span><span class="status {status_class}">{esc(view['identity_status'])}</span></div><h1>{esc(view['subject'])}</h1><p>{esc(view['headline'])}</p><div class="summary-grid"><div class="summary-card"><span class="eyebrow">Главные выводы</span><ul>{conclusions}</ul></div><div class="summary-card"><span class="eyebrow">Покрытие</span><h3>{stats['successful']} из {stats['total']} источников ответили</h3><p>{stats['configuration']} требуют настройки · {stats['unavailable']} недоступны</p></div></div><p><small>Запрос: {esc(inp.get('normalized'))} · цель: {esc(case.get('purpose'))} · законное основание: {'подтверждено' if case.get('consent') else 'не подтверждено'}</small></p></header>
 {_section('Личность', people_html, 'ФИО не подтверждено. Система не подменяет отсутствие данных поисковыми заголовками.')}
 {_section('Компании и профессиональные связи', org_html, 'Подтверждённых организаций или профессиональных связей не найдено.')}
 {_section('Контактные данные', contact_html, 'Дополнительные подтверждённые контакты не найдены.')}
 {_section('Публичные профили', profile_html, 'Публичные профили, доказанно связанные с исходным идентификатором, не найдены.')}
+{_section('Карта доказанных связей', graph_html, 'Доказанные связи между сущностями не сформированы.')}
 {_section('Доказательства выводов', evidence_html, 'Для подтверждённых выводов нет сохранённых доказательств.')}
 <section class="panel"><h2>Ограничения отчёта</h2><p>Отчёт отражает только доступные публичные данные на момент проверки. Совпадение не заменяет удостоверение личности, согласие кандидата и ручную проверку первоисточника. Отсутствие сведений не является негативным сигналом. AURORA не делает автоматических кадровых решений.</p></section>
 <details class="panel technical"><summary>Техническое состояние источников</summary>{run_html or '<p>Нет запусков.</p>'}</details>

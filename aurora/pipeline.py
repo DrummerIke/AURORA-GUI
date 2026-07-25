@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio, hashlib, html, ipaddress, json, os, re, shutil, socket, subprocess, time
+import asyncio, hashlib, html, http.client, ipaddress, json, os, re, shutil, socket, subprocess, time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import phonenumbers, requests
+from .content_fetcher import UnsafeUrlError, fetch_url
 try:
     import yaml
 except Exception:
@@ -19,13 +20,17 @@ except Exception:
 from ddgs import DDGS
 from phonenumbers import carrier, geocoder, timezone as phtz
 
-STATUSES={"OK","ERROR","TIMEOUT","CONFIGURATION_REQUIRED","RATE_LIMITED","DISABLED"}
+STATUSES={"OK","ERROR","TIMEOUT","CONFIGURATION_REQUIRED","RATE_LIMITED","INSUFFICIENT_INPUT","DISABLED"}
 PHONE_STOPLIST={"ваше имя","главная коды","если вам","комментарий имя тип","мошенники","мошенники реклама коллекторы","кто звонил","не бери трубку","обратная связь","пользовательское соглашение","privacy policy","sign in","your name","home codes","submit comment","who called","do not answer","menu","login","register","search","contact us","advertisement","breadcrumbs","личный кабинет","читать далее","оставить отзыв","номер телефона","политика конфиденциальности","показать ещё","похожие номера","телефонный справочник","служба поддержки","имя пользователя","first name","last name","learn more","read more","customer service","phone number","cookie policy","terms of use"}
 LOW_TRUST_PHONE_DOMAINS={"baza-nomerov.com","centerica.ru","kodtelefona.ru","mobile-monitor.ru","phoneradar.ru","region-operator.ru","spravochnik.tel","who-call.me","zvonok24.ru","numbase.ru","nomercheck.ru","truecaller.com","numlookup.com","findwhocallsyou.com"}
 ORG_STOPWORDS={"телефон","номер","контакты","отзывы","адрес","сайт","главная","реклама","звонок","поиск","phone","contact","reviews","website","home"}
 EMAIL_RE=re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 PERSON_RE=re.compile(r"\b([А-ЯЁ][а-яё-]{1,30}\s+[А-ЯЁ][а-яё-]{1,30}(?:\s+[А-ЯЁ][а-яё-]{1,30}){0,2})\b")
 ORG_RE=re.compile(r"\b((?:ООО|ПАО|АО|АНО|НКО|ИП)\s+(?:[«\"][^»\"]{2,100}[»\"]|[А-ЯЁA-Z][А-ЯЁA-Za-zа-яё0-9 .&_-]{2,100}))")
+INN_RE=re.compile(r"\bИНН\s*[:№]?\s*(\d{10}|\d{12})\b",re.I)
+OGRN_RE=re.compile(r"\bОГРН(?:ИП)?\s*[:№]?\s*(\d{13}|\d{15})\b",re.I)
+OFFICIAL_SITE_RE=re.compile(r"(?:официальный\s+сайт|official\s+site)\s*[:—-]?\s*(https?://[^\s<>'\"]+)",re.I)
+ROLE_RE=re.compile(r"\b(генеральный директор|директор|руководитель|учредитель|индивидуальный предприниматель|председатель|CEO|founder)\b",re.I)
 USERNAME_RE=re.compile(r"^@?[A-Za-z0-9_.-]{3,64}$")
 
 @dataclass
@@ -107,6 +112,14 @@ def independent_source_count(evidence:list[dict])->int:
     domains={domain(e.get('source_url','')) or e.get('source','') for e in evidence}
     hashes={e.get('content_hash','') for e in evidence if e.get('content_hash')}
     return min(len(domains),len(hashes)) if hashes else len(domains)
+def valid_inn(value:str)->bool:
+    if not value.isdigit() or len(value) not in {10,12}: return False
+    digits=list(map(int,value))
+    def checksum(weights): return sum(a*b for a,b in zip(weights,digits))%11%10
+    if len(digits)==10: return checksum([2,4,10,3,5,9,4,6,8])==digits[9]
+    return checksum([7,2,4,10,3,5,9,4,6,8])==digits[10] and checksum([3,7,2,4,10,3,5,9,4,6,8])==digits[11]
+def valid_ogrn(value:str)->bool:
+    return value.isdigit() and len(value) in {13,15} and int(value[:-1])%(11 if len(value)==13 else 13)%10==int(value[-1])
 
 class BaseConnector:
     id="base"; name="Base"; supported_input_types=[]; capabilities=[]; requires_api_key=False; api_env_vars=[]; priority=100; timeout_seconds=10; rate_limit=10; enabled=True
@@ -142,17 +155,34 @@ class WebSearchConnector(BaseConnector):
             if digits.startswith('7') and len(digits)==11: terms += ['8'+digits[1:], digits[1:]]
         queries=['"%s"'%term for term in dict.fromkeys(terms)]
         if inp.get('claimed_name'): queries.insert(0, '"%s" "%s"' % (inp['normalized'], inp['claimed_name']))
-        rows=[]
+        rows=[]; provider=os.getenv('AURORA_SEARCH_PROVIDER','brave').casefold()
+        if provider == 'brave' and not os.getenv('BRAVE_SEARCH_API_KEY'):
+            return ConnectorResult(self.id,"CONFIGURATION_REQUIRED","","",0,warnings=["Нужна переменная BRAVE_SEARCH_API_KEY"])
         def work():
             found=[]
-            with DDGS(timeout=min(10,self.timeout_seconds)) as ddgs:
-                for query in queries: found.extend(ddgs.text(query,max_results=int(os.getenv('AURORA_SEARCH_MAX_RESULTS','8'))) or [])
+            if provider == 'brave':
+                for query in queries:
+                    response=requests.get('https://api.search.brave.com/res/v1/web/search',params={'q':query,'count':int(os.getenv('AURORA_SEARCH_MAX_RESULTS','8'))},headers={'X-Subscription-Token':os.environ['BRAVE_SEARCH_API_KEY'],'Accept':'application/json'},timeout=min(10,self.timeout_seconds))
+                    if response.status_code == 429: raise RuntimeError('429 Brave Search rate limit')
+                    response.raise_for_status()
+                    for item in response.json().get('web',{}).get('results',[]): found.append({'href':item.get('url'),'title':item.get('title'),'body':item.get('description')})
+            else:
+                with DDGS(timeout=min(10,self.timeout_seconds)) as ddgs:
+                    for query in queries: found.extend(ddgs.text(query,max_results=int(os.getenv('AURORA_SEARCH_MAX_RESULTS','8'))) or [])
             return found
         rows=await asyncio.to_thread(work); evs=[]
         for i,r in enumerate(rows):
             url=str(r.get('href') or r.get('url') or ''); text=clean_text((r.get('title','')+' '+(r.get('body') or r.get('snippet') or '')))
             if not url or not text: continue
-            evs.append(asdict(Evidence(f"ev_web_{i}","public_web_search",url,"search_result",clean_text(r.get('title','')),text[:500],reliability=.45,direct_match=inp['normalized'].casefold() in text.casefold(),content_hash=hashlib.sha256(text.encode()).hexdigest())))
+            source_type='search_result'; reliability=.45
+            if os.getenv('AURORA_FETCH_CONTENT','false').casefold() == 'true' and i < int(os.getenv('AURORA_FETCH_MAX_PAGES','5')):
+                try:
+                    fetched=await asyncio.to_thread(fetch_url,url,timeout=float(os.getenv('AURORA_FETCH_TIMEOUT','8')),max_bytes=int(os.getenv('AURORA_FETCH_MAX_BYTES','1000000')))
+                    page=clean_text(fetched.body.decode('utf-8','replace'))
+                    if identifier_in_context(inp['normalized'],page): text=page[:4000]; source_type='fetched_page'; reliability=.6
+                except (UnsafeUrlError,OSError,ValueError,http.client.HTTPException) as exc:
+                    pass
+            evs.append(asdict(Evidence(f"ev_web_{i}",provider,url,source_type,clean_text(r.get('title','')),text[:1000],reliability=reliability,direct_match=identifier_in_context(inp['normalized'],text),content_hash=hashlib.sha256(text.encode()).hexdigest())))
         return ConnectorResult(self.id,"OK","","",0,[],evs)
 class CommandConnector(BaseConnector):
     command=[]
@@ -195,7 +225,48 @@ class DNS(BaseConnector):
     async def search(self,inp):
         ips=await asyncio.to_thread(socket.getaddrinfo, inp['normalized'], None); vals=sorted({x[4][0] for x in ips}); ev=Evidence("ev_dns","dns",source_type="dns",title="DNS A/AAAA",excerpt=", ".join(vals),reliability=.8,direct_match=True); return ConnectorResult(self.id,"OK","","",0,evidence=[asdict(ev)])
 
-CONNECTOR_CLASSES=[PhoneMetadataConnector,WebSearchConnector,RDAP,CT,Wayback,Github,DNS,PhoneInfogaConnector,SherlockConnector,MaigretConnector,HoleheConnector,VT,Shodan,Censys,SecurityTrails,HIBP,Twilio,IPQS,AbstractPhone]
+class AlephConnector(BaseConnector):
+    id="aleph"; name="OCCRP Aleph"; supported_input_types=["person_name","organization"]; capabilities=["investigative_entities","documents"]
+    async def search(self,inp):
+        def request_aleph():
+            headers={"User-Agent":"AURORA/1.0"}
+            if os.getenv("ALEPH_API_KEY"): headers["Authorization"]="ApiKey "+os.environ["ALEPH_API_KEY"]
+            return requests.get("https://aleph.occrp.org/api/2/entities",params={"q":inp['normalized'],"limit":10},headers=headers,timeout=self.timeout_seconds)
+        response=await asyncio.to_thread(request_aleph)
+        if response.status_code in {401,403}: return ConnectorResult(self.id,"CONFIGURATION_REQUIRED","","",0,warnings=["Для этого запроса нужен ALEPH_API_KEY"])
+        if response.status_code == 429: return ConnectorResult(self.id,"RATE_LIMITED","","",0,warnings=["Aleph rate limit"])
+        response.raise_for_status(); data=response.json(); evs=[]
+        for index,item in enumerate(data.get("results",[])[:10]):
+            caption=str(item.get("caption") or item.get("name") or "Aleph entity")
+            entity_id=str(item.get("id") or "")
+            excerpt=clean_text(caption+" "+json.dumps(item.get("properties",{}),ensure_ascii=False))[:1000]
+            evs.append(asdict(Evidence(f"ev_aleph_{index}","OCCRP Aleph",f"https://aleph.occrp.org/entities/{entity_id}" if entity_id else "https://aleph.occrp.org/","investigative_graph",caption,excerpt,reliability=.65,direct_match=inp['normalized'].casefold() in excerpt.casefold(),content_hash=hashlib.sha256(excerpt.encode()).hexdigest())))
+        return ConnectorResult(self.id,"OK","","",0,evidence=evs,warnings=["Aleph-совпадения являются кандидатами и требуют независимого подтверждения."])
+
+class OpenSanctionsConnector(BaseConnector):
+    id="opensanctions"; name="OpenSanctions"; supported_input_types=["person_name","organization"]; capabilities=["sanctions","pep","compliance"]; requires_api_key=True; api_env_vars=["OPENSANCTIONS_API_KEY"]
+    async def search(self,inp):
+        secondary=inp.get("birth_date") or inp.get("registration_number") or inp.get("country")
+        if not secondary:
+            return ConnectorResult(self.id,"INSUFFICIENT_INPUT","","",0,warnings=["Compliance screening не выполняется только по имени: нужна дата рождения, страна или регистрационный номер."])
+        schema="Person" if inp['type']=="person_name" else "Company"
+        properties={"name":[inp['normalized']]}
+        if inp.get('birth_date'): properties['birthDate']=[inp['birth_date']]
+        if inp.get('registration_number'): properties['registrationNumber']=[inp['registration_number']]
+        if inp.get('country'): properties['country']=[inp['country']]
+        def request_match():
+            return requests.post("https://api.opensanctions.org/match/default",params={"api_key":os.environ['OPENSANCTIONS_API_KEY']},json={"queries":{"subject":{"schema":schema,"properties":properties}}},timeout=self.timeout_seconds)
+        response=await asyncio.to_thread(request_match)
+        if response.status_code == 429: return ConnectorResult(self.id,"RATE_LIMITED","","",0,warnings=["OpenSanctions rate limit"])
+        response.raise_for_status(); result=response.json().get('responses',{}).get('subject',{}); evs=[]
+        for index,match in enumerate(result.get('results',[])[:10]):
+            score=float(match.get('score') or 0)
+            if score < .7: continue
+            excerpt=clean_text(json.dumps(match,ensure_ascii=False))[:1000]
+            evs.append(asdict(Evidence(f"ev_opensanctions_{index}","OpenSanctions","https://www.opensanctions.org/","compliance_match","Compliance candidate",excerpt,reliability=.8,direct_match=True,content_hash=hashlib.sha256(excerpt.encode()).hexdigest())))
+        return ConnectorResult(self.id,"OK","","",0,evidence=evs,warnings=["Совпадение compliance не является автоматическим основанием для кадрового решения."])
+
+CONNECTOR_CLASSES=[PhoneMetadataConnector,WebSearchConnector,RDAP,CT,Wayback,Github,DNS,AlephConnector,OpenSanctionsConnector,PhoneInfogaConnector,SherlockConnector,MaigretConnector,HoleheConnector,VT,Shodan,Censys,SecurityTrails,HIBP,Twilio,IPQS,AbstractPhone]
 
 def load_cfg():
     p=Path(os.getenv('AURORA_CONNECTORS_CONFIG','config/connectors.yaml'))
@@ -262,7 +333,18 @@ class EntityResolver:
             if inds < 2 and not trusted:
                 rejected.append(asdict(RejectedCandidate(item['value'],'organization','insufficient_independent_confirmation',ents[0].get('source_url',''),ents[0].get('excerpt','')[:250]))); continue
             score=ConfidenceScorer().score(True,sum(e.get('reliability',.5) for e in ents)/len(ents),inds,.8,[])
-            entities.append(Entity('org_'+hashlib.sha1(key.encode()).hexdigest()[:8],'organization',[EntityClaim('legal_name',item['value'],key,score['final_score'],'Подтверждено' if score['final_score']>=80 else 'Вероятно',len(ents),inds,[e['id'] for e in ents],extraction_method='context_consensus',reasoning_summary='Организация опубликована рядом с исходным номером и подтверждена независимыми источниками.',confidence_breakdown=score)]))
+            org_claims=[EntityClaim('legal_name',item['value'],key,score['final_score'],'Подтверждено' if score['final_score']>=80 else 'Вероятно',len(ents),inds,[e['id'] for e in ents],extraction_method='context_consensus',reasoning_summary='Организация опубликована рядом с исходным номером и подтверждена независимыми источниками.',confidence_breakdown=score)]
+            context=' '.join(e.get('excerpt','') for e in ents)
+            for inn in sorted(set(INN_RE.findall(context))):
+                if valid_inn(inn): org_claims.append(EntityClaim('inn',inn,inn,90,'Подтверждено',len(ents),inds,[e['id'] for e in ents],extraction_method='structured_identifier',reasoning_summary='ИНН прошёл контрольную сумму и найден в контексте организации.'))
+            for ogrn in sorted(set(OGRN_RE.findall(context))):
+                if valid_ogrn(ogrn): org_claims.append(EntityClaim('ogrn',ogrn,ogrn,90,'Подтверждено',len(ents),inds,[e['id'] for e in ents],extraction_method='structured_identifier',reasoning_summary='ОГРН прошёл контрольную сумму и найден в контексте организации.'))
+            for site in sorted(set(OFFICIAL_SITE_RE.findall(context))):
+                if safe_url(site): org_claims.append(EntityClaim('official_website',site,site.casefold().rstrip('/'),75,'Вероятно',len(ents),inds,[e['id'] for e in ents],extraction_method='explicit_context',reasoning_summary='URL явно обозначен как официальный сайт в контексте организации.'))
+            roles=sorted({role.casefold() for role in ROLE_RE.findall(context)})
+            if claimed and claimed in normalize_person(context):
+                for role in roles: org_claims.append(EntityClaim('role',role,role,70,'Вероятно',len(ents),inds,[e['id'] for e in ents],extraction_method='context_relation',reasoning_summary='Роль и заявленное ФИО опубликованы в контексте организации.'))
+            entities.append(Entity('org_'+hashlib.sha1(key.encode()).hexdigest()[:8],'organization',org_claims))
         for item in by_email.values():
             ok,reason=filt.valid_email(item['value'],item['evidence'],input_value)
             if not ok: rejected.append(asdict(RejectedCandidate(item['value'],'email',reason,item['evidence'][0].get('source_url',''),item['evidence'][0].get('excerpt','')[:250]))); continue

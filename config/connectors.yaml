@@ -7,6 +7,8 @@ connectors:
   certificate_transparency: {enabled: true, timeout: 10, priority: 35, rate_limit: 20, cache_ttl: 86400, requires_consent: false, allowed_input_types: [domain]}
   wayback_cdx: {enabled: true, timeout: 10, priority: 40, rate_limit: 20, cache_ttl: 86400, requires_consent: false, allowed_input_types: [domain,url]}
   github_public: {enabled: true, timeout: 10, priority: 45, rate_limit: 30, cache_ttl: 3600, requires_consent: false, allowed_input_types: [email,username,organization,domain]}
+  aleph: {enabled: true, timeout: 15, priority: 46, rate_limit: 10, cache_ttl: 3600, requires_consent: true, allowed_input_types: [person_name,organization]}
+  opensanctions: {enabled: true, timeout: 15, priority: 47, rate_limit: 10, cache_ttl: 86400, requires_consent: true, allowed_input_types: [person_name,organization]}
   dns_lookup: {enabled: true, timeout: 8, priority: 25, rate_limit: 60, cache_ttl: 86400, requires_consent: false, allowed_input_types: [domain]}
   phoneinfoga: {enabled: true, timeout: 25, priority: 50, rate_limit: 10, cache_ttl: 86400, requires_consent: true, allowed_input_types: [phone]}
   sherlock: {enabled: true, timeout: 40, priority: 55, rate_limit: 10, cache_ttl: 86400, requires_consent: true, allowed_input_types: [username,telegram_username]}

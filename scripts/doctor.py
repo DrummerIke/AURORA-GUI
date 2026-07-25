@@ -6,7 +6,7 @@ try:
     import yaml
 except Exception:
     yaml=None
-REQ_ENV={"virustotal":["VIRUSTOTAL_API_KEY"],"shodan":["SHODAN_API_KEY"],"censys":["CENSYS_API_ID","CENSYS_API_SECRET"],"securitytrails":["SECURITYTRAILS_API_KEY"],"haveibeenpwned":["HIBP_API_KEY"],"twilio_lookup":["TWILIO_ACCOUNT_SID","TWILIO_AUTH_TOKEN"],"ipqualityscore":["IPQUALITYSCORE_API_KEY"],"abstract_phone":["ABSTRACT_PHONE_API_KEY"]}
+REQ_ENV={"public_web_search":["BRAVE_SEARCH_API_KEY"],"opensanctions":["OPENSANCTIONS_API_KEY"],"virustotal":["VIRUSTOTAL_API_KEY"],"shodan":["SHODAN_API_KEY"],"censys":["CENSYS_API_ID","CENSYS_API_SECRET"],"securitytrails":["SECURITYTRAILS_API_KEY"],"haveibeenpwned":["HIBP_API_KEY"],"twilio_lookup":["TWILIO_ACCOUNT_SID","TWILIO_AUTH_TOKEN"],"ipqualityscore":["IPQUALITYSCORE_API_KEY"],"abstract_phone":["ABSTRACT_PHONE_API_KEY"]}
 BINS=["phoneinfoga","sherlock","maigret","holehe","dnsx"]
 PYMOD=["flask","phonenumbers","ddgs","requests"]
 def parse_args():

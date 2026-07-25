@@ -30,3 +30,14 @@
 ```bash
 bash scripts/check_connectors.sh
 ```
+
+## Официальный Search Provider и загрузка страниц
+
+По умолчанию используется Brave Search API (`AURORA_SEARCH_PROVIDER=brave`, `BRAVE_SEARCH_API_KEY`). DDGS сохранён только как явно включаемый fallback (`AURORA_SEARCH_PROVIDER=ddgs`) и не выдаётся за официальный API.
+
+`AURORA_FETCH_CONTENT=true` включает `ContentFetcher`: перед соединением проверяются все DNS-адреса, private/special-use IP блокируются, соединение закрепляется на проверенном IP, каждый redirect проверяется заново, разрешены только HTTP(S) и MIME `text/html`, `text/plain`, `application/xhtml+xml`, `application/json`. Размер, timeout и число страниц ограничиваются переменными из `.env.example`.
+
+## Investigative и compliance
+
+- `aleph` выполняет поиск уже известного ФИО или организации через официальный OCCRP Aleph API. Результаты остаются кандидатами до независимого подтверждения. `ALEPH_API_KEY` нужен для закрытых коллекций/ограниченных запросов.
+- `opensanctions` требует `OPENSANCTIONS_API_KEY` и не запускает screening только по имени. Нужен хотя бы дополнительный идентификатор: дата рождения, страна либо регистрационный номер. Статус без него — `INSUFFICIENT_INPUT`.

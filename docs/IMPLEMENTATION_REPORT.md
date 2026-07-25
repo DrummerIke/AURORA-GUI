@@ -70,3 +70,14 @@ python scripts/doctor.py
 ```
 
 Новых системных зависимостей для renderer не требуется.
+
+## Search, fetch, compliance и безопасность
+
+- Добавлен Brave Search API как официальный provider; DDGS оставлен явным fallback.
+- Добавлен DNS-pinned ContentFetcher с SSRF-блокировкой, MIME allowlist, redirect revalidation, timeout и лимитом ответа.
+- Добавлены Aleph и OpenSanctions adapters. OpenSanctions не выполняет name-only screening.
+- OrganizationResolver извлекает и проверяет контрольные суммы ИНН/ОГРН, явно обозначенный официальный сайт и роль заявленного лица.
+- В отчёте отображается evidence-граф: каждое ребро содержит статус и `evidence_ids`.
+- Добавлены опциональные Bearer/HTTP Basic authentication и append-only HMAC-linked audit log.
+
+Файловый audit log является **tamper-evident**, а не физически immutable. Для реальной неизменяемости нужен внешний WORM/object-lock storage или PostgreSQL audit sink с отдельными правами. PostgreSQL/Redis из Compose пока не включены в активный путь jobs: имитация готового worker не добавлялась, потому что текущий in-memory job registry нельзя безопасно разделить между процессами без миграции persistence layer.
