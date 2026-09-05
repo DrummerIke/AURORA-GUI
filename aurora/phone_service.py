@@ -1,68 +1,99 @@
 from pathlib import Path
 
-from phone_engine import create_report as create_phone_report
-from web_search_engine import search_phone
-
-from .enrichment import enrich_findings
+from .deep_public import enrich_case_with_public_pages
+from .identity_core import enrich_phone_case
 from .jobs import append_log, finish_job, jobs
-from .person_card import build_person_card
-from .quality_filter import clean_search_result
+from .pipeline import mask_sensitive, run_pipeline_sync
+from .report_renderer import render_report
+from .result_quality import enrich_targeted_search, filter_low_value_results
 
 
-def phone_worker(job_id: str, phone: str) -> None:
+def phone_worker(job_id: str, phone: str, context: dict | None = None) -> None:
     case_dir = Path(jobs[job_id]["dir"])
+    context = context or {}
     try:
-        append_log(job_id, "AURORA Phone Intelligence")
-        append_log(job_id, f"Номер: {phone}")
-        append_log(job_id, "[1/5] Анализ номера и региона...")
-
-        report = create_phone_report(phone, case_dir)
-        phone_data = report.get("phone", {})
-        append_log(job_id, f"Оператор: {phone_data.get('carrier') or 'не определён'}")
-        append_log(job_id, f"Регион: {phone_data.get('location') or phone_data.get('region') or 'не определён'}")
-
-        append_log(job_id, "[2/5] Быстрый сбор открытых данных...")
-        result = search_phone(
-            phone=phone_data["e164"],
-            variants=report["variants"],
-            output_dir=case_dir,
-            max_results_per_query=6,
-        )
-
-        raw_count = len(result.get("findings", []))
-        append_log(job_id, f"Первичных сущностей до проверки: {raw_count}")
-
-        append_log(job_id, "[3/5] Отсев ложных ФИО, адресов и телефонных каталогов...")
-        result = clean_search_result(result, case_dir)
-        findings = result.get("findings", [])
-        rejected_count = result.get("quality_filter", {}).get("rejected_count", 0)
-        append_log(job_id, f"Подтверждённых сущностей: {len(findings)}")
-        append_log(job_id, f"Отброшено ложных совпадений: {rejected_count}")
-
-        append_log(job_id, "[4/5] Каскадное обогащение email и username...")
-        enrichment = enrich_findings(findings, case_dir)
-        module_count = len(enrichment.get("modules", []))
-        profile_count = len(enrichment.get("profiles", []))
-        append_log(job_id, f"Запущено модулей: {module_count}")
-        append_log(job_id, f"Дополнительных профилей: {profile_count}")
-
-        card = build_person_card(report, result, case_dir, enrichment=enrichment)
-
-        append_log(job_id, "[5/5] Карточка сформирована.")
-        if card.get("possible_name"):
+        append_log(job_id, "AURORA законный OSINT-конвейер")
+        append_log(job_id, f"Запрос: {mask_sensitive(phone)}")
+        if context:
             append_log(
                 job_id,
-                f"Вероятное ФИО: {card['possible_name']} "
-                f"({card.get('name_confidence', 0)}%)",
+                "Известный контекст добавлен пользователем; он будет проверяться, "
+                "а не считаться доказанным.",
             )
-        else:
-            append_log(job_id, "ФИО в открытых источниках не подтверждено.")
 
-        entity_count = sum(len(items) for items in card.get("entities", {}).values())
-        append_log(job_id, f"Всего связанных сущностей: {entity_count}")
-        append_log(job_id, "Открой «Карточку человека».")
+        append_log(job_id, "[1/7] Нормализация и базовые источники...")
+        case = run_pipeline_sync(phone, job_id)
+
+        append_log(
+            job_id,
+            "[2/7] Прицельный поиск по социальным сетям, объявлениям, "
+            "бизнес-источникам и публичным документам...",
+        )
+        case = enrich_targeted_search(case)
+        targeted = case.get("summary", {}).get("targeted_search", {})
+        append_log(
+            job_id,
+            "Прицельных результатов: "
+            f"{targeted.get('results', 0)}; "
+            "высокого сигнала: "
+            f"{targeted.get('high_signal_results', 0)}.",
+        )
+
+        append_log(
+            job_id,
+            "[3/7] Identity Core: варианты номера, корреляция и первичная "
+            "оценка кандидатов...",
+        )
+        case = enrich_phone_case(case, context)
+        case = filter_low_value_results(case)
+
+        append_log(
+            job_id,
+            "[4/7] Глубокая проверка только содержательных публичных страниц...",
+        )
+        case = enrich_case_with_public_pages(case)
+        case = filter_low_value_results(case)
+        deep_stats = case.get("summary", {}).get("deep_public", {})
+        append_log(
+            job_id,
+            "Точные содержательные страницы: "
+            f"{deep_stats.get('pages_with_exact_phone', 0)}; "
+            "ФИО-кандидаты: "
+            f"{deep_stats.get('person_candidates', 0)}; "
+            "email: "
+            f"{deep_stats.get('email_candidates', 0)}; "
+            "организации: "
+            f"{deep_stats.get('organization_candidates', 0)}; "
+            "публичные профили: "
+            f"{deep_stats.get('username_candidates', 0)}.",
+        )
+
+        append_log(
+            job_id,
+            "[5/7] Удаление каталогов «кто звонил», SEO-шаблонов и "
+            "кандидатов без живого доказательства...",
+        )
+        quality = case.get("summary", {}).get("quality_filter", {})
+        append_log(
+            job_id,
+            "Скрыто низкосигнальных доказательств: "
+            f"{quality.get('suppressed_low_signal_evidence', 0)}; "
+            "осиротевших кандидатов: "
+            f"{quality.get('suppressed_orphan_entities', 0)}.",
+        )
+
+        append_log(job_id, "[6/7] Формирование result-first отчёта...")
+        render_report(case, case_dir)
+
+        append_log(job_id, "[7/7] Итоговый отчёт сформирован.")
+        append_log(job_id, f"ФИО: {case['summary']['fio']}")
+        append_log(job_id, f"Email: {case['summary']['email']}")
+        append_log(
+            job_id,
+            "Полезных связанных сущностей: "
+            f"{case.get('summary', {}).get('useful_entity_count', 0)}.",
+        )
         finish_job(job_id)
-
     except Exception as exc:
-        append_log(job_id, f"[FATAL] {exc}")
+        append_log(job_id, f"[FATAL] {mask_sensitive(str(exc))}")
         finish_job(job_id, "error")

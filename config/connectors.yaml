@@ -1,0 +1,22 @@
+concurrency: 6
+retention_days: 30
+connectors:
+  phone_metadata: {enabled: true, timeout: 5, priority: 10, rate_limit: 60, cache_ttl: 86400, requires_consent: false, allowed_input_types: [phone]}
+  public_web_search: {enabled: true, timeout: 12, priority: 20, rate_limit: 20, cache_ttl: 3600, requires_consent: true, allowed_input_types: [phone,email,username,telegram_username,domain,url,ip_address,organization,person_name]}
+  rdap_whois: {enabled: true, timeout: 10, priority: 30, rate_limit: 30, cache_ttl: 86400, requires_consent: false, allowed_input_types: [domain,ip_address]}
+  certificate_transparency: {enabled: true, timeout: 10, priority: 35, rate_limit: 20, cache_ttl: 86400, requires_consent: false, allowed_input_types: [domain]}
+  wayback_cdx: {enabled: true, timeout: 10, priority: 40, rate_limit: 20, cache_ttl: 86400, requires_consent: false, allowed_input_types: [domain,url]}
+  github_public: {enabled: true, timeout: 10, priority: 45, rate_limit: 30, cache_ttl: 3600, requires_consent: false, allowed_input_types: [email,username,organization,domain]}
+  dns_lookup: {enabled: true, timeout: 8, priority: 25, rate_limit: 60, cache_ttl: 86400, requires_consent: false, allowed_input_types: [domain]}
+  phoneinfoga: {enabled: true, timeout: 25, priority: 50, rate_limit: 10, cache_ttl: 86400, requires_consent: true, allowed_input_types: [phone]}
+  sherlock: {enabled: true, timeout: 40, priority: 55, rate_limit: 10, cache_ttl: 86400, requires_consent: true, allowed_input_types: [username,telegram_username]}
+  maigret: {enabled: true, timeout: 45, priority: 56, rate_limit: 10, cache_ttl: 86400, requires_consent: true, allowed_input_types: [username,telegram_username]}
+  holehe: {enabled: true, timeout: 35, priority: 57, rate_limit: 10, cache_ttl: 86400, requires_consent: true, allowed_input_types: [email]}
+  virustotal: {enabled: true, timeout: 10, priority: 70, rate_limit: 4, cache_ttl: 86400, requires_consent: false, allowed_input_types: [domain,url,ip_address]}
+  shodan: {enabled: true, timeout: 10, priority: 71, rate_limit: 4, cache_ttl: 86400, requires_consent: false, allowed_input_types: [ip_address,domain]}
+  censys: {enabled: true, timeout: 10, priority: 72, rate_limit: 4, cache_ttl: 86400, requires_consent: false, allowed_input_types: [domain,ip_address]}
+  securitytrails: {enabled: true, timeout: 10, priority: 73, rate_limit: 4, cache_ttl: 86400, requires_consent: false, allowed_input_types: [domain]}
+  haveibeenpwned: {enabled: true, timeout: 10, priority: 74, rate_limit: 2, cache_ttl: 86400, requires_consent: true, allowed_input_types: [email]}
+  twilio_lookup: {enabled: true, timeout: 10, priority: 75, rate_limit: 5, cache_ttl: 86400, requires_consent: true, allowed_input_types: [phone]}
+  ipqualityscore: {enabled: true, timeout: 10, priority: 76, rate_limit: 5, cache_ttl: 86400, requires_consent: true, allowed_input_types: [phone,email,ip_address,url]}
+  abstract_phone: {enabled: true, timeout: 10, priority: 77, rate_limit: 5, cache_ttl: 86400, requires_consent: true, allowed_input_types: [phone]}
