@@ -17,6 +17,39 @@ except Exception:  # pragma: no cover - optional fallback
     BeautifulSoup = None
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
+PERSON_RE = re.compile(
+    r"\b([А-ЯЁ][а-яё-]{1,30}\s+[А-ЯЁ][а-яё-]{1,30}"
+    r"(?:\s+[А-ЯЁ][а-яё-]{1,30}){0,2})\b"
+)
+ORG_RE = re.compile(
+    r"\b((?:ООО|АО|ПАО|ЗАО|ИП|АНО|НКО)\s+[«\"„]?"
+    r"[А-ЯЁA-Z0-9][^<>\n]{1,80}?[»\"“]?(?=\s{2,}|[,.!?;]|$))",
+    re.I,
+)
+NAME_LABEL_RE = re.compile(
+    r"(?:ФИО|контактное\s+лицо|владелец|директор|руководитель|имя)\s*[:—-]\s*"
+    r"([А-ЯЁ][а-яё-]{1,30}\s+[А-ЯЁ][а-яё-]{1,30}"
+    r"(?:\s+[А-ЯЁ][а-яё-]{1,30}){0,2})",
+    re.I,
+)
+SOCIAL_HOSTS = {
+    "vk.com": "vk",
+    "t.me": "telegram",
+    "telegram.me": "telegram",
+    "ok.ru": "ok",
+    "github.com": "github",
+    "instagram.com": "instagram",
+    "linkedin.com": "linkedin",
+}
+GENERIC_SOCIAL_PATHS = {
+    "share", "login", "signup", "search", "explore", "home", "about",
+    "privacy", "terms", "help", "messages", "settings",
+}
+BAD_NAME_FRAGMENTS = {
+    "телефон", "номер", "контакты", "главная", "страница", "россия",
+    "обратная связь", "пользовательское соглашение", "политика конфиденциальности",
+    "кто звонил", "мобильный номер", "частное лицо",
+}
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 "
@@ -108,7 +141,7 @@ def clean_page(raw_html: str) -> tuple[str, str]:
     )
 
 
-def context_around_phone(text: str, phone: str, radius: int = 900) -> str:
+def context_around_phone(text: str, phone: str, radius: int = 1100) -> str:
     if not text:
         return ""
     digits = phone_digits(phone)
@@ -136,6 +169,97 @@ def _response_body(response: requests.Response) -> bytes:
             raise ValueError("page too large")
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def _normalise_name(value: str) -> str:
+    return " ".join(value.split()).strip(" ,.;:-")
+
+
+def _valid_person_candidate(value: str) -> bool:
+    candidate = _normalise_name(value)
+    lowered = candidate.casefold()
+    if not candidate or any(fragment in lowered for fragment in BAD_NAME_FRAGMENTS):
+        return False
+    words = candidate.split()
+    if not 2 <= len(words) <= 4:
+        return False
+    return all(re.fullmatch(r"[А-ЯЁ][а-яё-]{1,30}", word) for word in words)
+
+
+def _extract_names(text: str) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+    for value in NAME_LABEL_RE.findall(text or ""):
+        value = _normalise_name(value)
+        key = value.casefold()
+        if _valid_person_candidate(value) and key not in seen:
+            seen.add(key)
+            found.append(value)
+    for value in PERSON_RE.findall(text or ""):
+        value = _normalise_name(value)
+        key = value.casefold()
+        if _valid_person_candidate(value) and key not in seen:
+            seen.add(key)
+            found.append(value)
+        if len(found) >= 10:
+            break
+    return found
+
+
+def _extract_orgs(text: str) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for value in ORG_RE.findall(text or ""):
+        value = re.sub(r"\s+", " ", value).strip(" ,.;:-")
+        key = value.casefold()
+        if value and key not in seen:
+            seen.add(key)
+            values.append(value)
+    return values[:8]
+
+
+def _profile_from_url(url: str) -> dict | None:
+    parsed = urlparse(url or "")
+    host = (parsed.hostname or "").casefold().removeprefix("www.")
+    network = SOCIAL_HOSTS.get(host)
+    if not network:
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if not parts:
+        return None
+    username = parts[0].lstrip("@").strip()
+    if not username or username.casefold() in GENERIC_SOCIAL_PATHS:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{2,80}", username):
+        return None
+    return {"network": network, "username": username, "url": url}
+
+
+def _extract_social_profiles(raw_html: str, base_url: str) -> list[dict]:
+    links: list[str] = []
+    if BeautifulSoup is not None:
+        soup = BeautifulSoup(raw_html or "", "html.parser")
+        for anchor in soup.find_all("a", href=True):
+            links.append(urljoin(base_url, anchor.get("href", "")))
+    else:
+        for href in re.findall(r"href=[\"']([^\"']+)[\"']", raw_html or "", re.I):
+            links.append(urljoin(base_url, href))
+
+    source_profile = _profile_from_url(base_url)
+    profiles: list[dict] = [source_profile] if source_profile else []
+    seen = {(item["network"], item["username"].casefold()) for item in profiles}
+    for link in links:
+        profile = _profile_from_url(link)
+        if not profile:
+            continue
+        key = (profile["network"], profile["username"].casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        profiles.append(profile)
+        if len(profiles) >= 12:
+            break
+    return profiles
 
 
 def fetch_page_evidence(item: dict, phone: str) -> dict | None:
@@ -184,6 +308,9 @@ def fetch_page_evidence(item: dict, phone: str) -> dict | None:
 
     excerpt = context_around_phone(text, phone)
     emails = sorted({value.casefold() for value in EMAIL_RE.findall(excerpt)})
+    names = _extract_names(excerpt)
+    organisations = _extract_orgs(excerpt)
+    social_profiles = _extract_social_profiles(raw_html, current_url)
     digest = hashlib.sha256(f"{current_url}|{excerpt}".encode()).hexdigest()
     return {
         "id": f"ev_page_{digest[:12]}",
@@ -191,13 +318,16 @@ def fetch_page_evidence(item: dict, phone: str) -> dict | None:
         "source_url": current_url,
         "source_type": "public_page",
         "title": title or item.get("title") or current_url,
-        "excerpt": excerpt[:2200],
+        "excerpt": excerpt[:2400],
         "reliability": 0.76,
         "direct_match": True,
         "content_hash": digest,
         "metadata": {
             "parent_evidence_id": item.get("id"),
             "extracted_emails": emails,
+            "extracted_names": names,
+            "extracted_organisations": organisations,
+            "social_profiles": social_profiles,
         },
     }
 
@@ -206,14 +336,22 @@ def fetch_phone_linked_pages(
     evidence: list[dict], phone: str, max_pages: int | None = None
 ) -> list[dict]:
     if max_pages is None:
-        max_pages = int(os.getenv("AURORA_DEEP_FETCH_MAX_PAGES", "10"))
-    max_pages = max(0, min(max_pages, 20))
+        max_pages = int(os.getenv("AURORA_DEEP_FETCH_MAX_PAGES", "15"))
+    max_pages = max(0, min(max_pages, 30))
     if max_pages == 0:
         return []
 
     candidates: list[dict] = []
     seen_urls: set[str] = set()
-    for item in evidence:
+    ranked = sorted(
+        evidence,
+        key=lambda item: (
+            bool(item.get("direct_match")),
+            float(item.get("reliability", 0.0)),
+        ),
+        reverse=True,
+    )
+    for item in ranked:
         url = str(item.get("source_url") or "").rstrip("/")
         if not url or url.casefold() in seen_urls:
             continue
@@ -228,14 +366,14 @@ def fetch_phone_linked_pages(
         return []
 
     results: list[dict] = []
-    workers = min(4, len(candidates))
+    workers = min(5, len(candidates))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
             executor.submit(fetch_page_evidence, item, phone): item
             for item in candidates
         }
         try:
-            for future in as_completed(futures, timeout=25):
+            for future in as_completed(futures, timeout=35):
                 try:
                     result = future.result()
                 except Exception:
@@ -265,55 +403,161 @@ def _known_entity_values(case: dict, entity_type: str) -> set[str]:
     return values
 
 
-def _email_entities_from_pages(case: dict, pages: list[dict]) -> list[dict]:
-    grouped: dict[str, list[dict]] = {}
-    for page in pages:
-        values = set(page.get("metadata", {}).get("extracted_emails") or [])
-        values.update(value.casefold() for value in EMAIL_RE.findall(page.get("excerpt", "")))
-        for value in values:
-            grouped.setdefault(value, []).append(page)
-
-    existing = _known_entity_values(case, "email")
-    entities: list[dict] = []
-    for email, items in grouped.items():
-        if email in existing:
-            continue
-        domains = {_domain(item.get("source_url", "")) for item in items}
-        domains.discard("")
-        score = min(88, 68 + max(0, len(domains) - 1) * 10)
-        entities.append(
+def _entity(
+    entity_type: str,
+    field: str,
+    value: str,
+    items: list[dict],
+    *,
+    base_score: int,
+    method: str,
+    reasoning: str,
+) -> dict:
+    domains = {_domain(item.get("source_url", "")) for item in items}
+    domains.discard("")
+    score = min(90, base_score + max(0, len(domains) - 1) * 10)
+    status = "Высокая вероятность" if len(domains) >= 2 and score >= 78 else "Вероятно"
+    normalized = value.casefold().lstrip("@") if entity_type == "username" else value.casefold()
+    return {
+        "id": f"{entity_type}_page_{hashlib.sha1(normalized.encode()).hexdigest()[:10]}",
+        "type": entity_type,
+        "claims": [
             {
-                "id": f"email_page_{hashlib.sha1(email.encode()).hexdigest()[:10]}",
-                "type": "email",
-                "claims": [
-                    {
-                        "field": "email",
-                        "value": email,
-                        "normalized_value": email,
-                        "confidence": score,
-                        "verification_status": (
-                            "Высокая вероятность" if len(domains) >= 2 else "Вероятно"
-                        ),
-                        "source_count": len(items),
-                        "independent_source_count": len(domains),
-                        "evidence_ids": [item["id"] for item in items],
-                        "extraction_method": "phone_linked_public_page",
-                        "reasoning_summary": (
-                            "Email найден на публичной странице, где присутствует "
-                            "исходный номер телефона. Совпадение требует проверки "
-                            "контекста страницы."
-                        ),
-                        "confidence_breakdown": {
-                            "direct_phone_page_match": 55,
-                            "source_reliability": 13,
-                            "independent_confirmation": max(0, len(domains) - 1) * 10,
-                            "final_score": score,
-                        },
-                    }
-                ],
+                "field": field,
+                "value": value,
+                "normalized_value": normalized,
+                "confidence": score,
+                "verification_status": status,
+                "source_count": len(items),
+                "independent_source_count": len(domains),
+                "evidence_ids": [item["id"] for item in items],
+                "extraction_method": method,
+                "reasoning_summary": reasoning,
+                "confidence_breakdown": {
+                    "exact_phone_page": base_score,
+                    "independent_confirmation": max(0, len(domains) - 1) * 10,
+                    "final_score": score,
+                },
             }
+        ],
+    }
+
+
+def _entities_from_pages(case: dict, pages: list[dict]) -> list[dict]:
+    buckets: dict[str, dict[str, list[dict]]] = {
+        "email": {},
+        "person": {},
+        "organization": {},
+        "username": {},
+    }
+    username_display: dict[str, str] = {}
+
+    for page in pages:
+        metadata = page.get("metadata", {})
+        for email in metadata.get("extracted_emails") or []:
+            buckets["email"].setdefault(email.casefold(), []).append(page)
+        for name in metadata.get("extracted_names") or []:
+            buckets["person"].setdefault(name.casefold(), []).append(page)
+        for org in metadata.get("extracted_organisations") or []:
+            buckets["organization"].setdefault(org.casefold(), []).append(page)
+        for profile in metadata.get("social_profiles") or []:
+            username = str(profile.get("username") or "").strip()
+            network = str(profile.get("network") or "social").strip()
+            if not username:
+                continue
+            key = f"{network}:{username.casefold()}"
+            username_display[key] = f"{network}: @{username}"
+            buckets["username"].setdefault(key, []).append(page)
+
+    entities: list[dict] = []
+    existing = {
+        entity_type: _known_entity_values(case, entity_type)
+        for entity_type in buckets
+    }
+
+    for email, items in buckets["email"].items():
+        if email in existing["email"]:
+            continue
+        entities.append(
+            _entity(
+                "email", "email", email, items,
+                base_score=68,
+                method="phone_linked_public_page",
+                reasoning=(
+                    "Email найден на публичной странице, где исходный номер "
+                    "телефона присутствует непосредственно в тексте."
+                ),
+            )
         )
+
+    for normalized, items in buckets["person"].items():
+        if normalized in existing["person"]:
+            continue
+        value = next(
+            name
+            for page in items
+            for name in page.get("metadata", {}).get("extracted_names", [])
+            if name.casefold() == normalized
+        )
+        entities.append(
+            _entity(
+                "person", "fio_candidate", value, items,
+                base_score=58,
+                method="phone_linked_public_page_name",
+                reasoning=(
+                    "ФИО-кандидат найден в непосредственном контексте номера "
+                    "на публичной странице. Это кандидат, а не установленный владелец."
+                ),
+            )
+        )
+
+    for normalized, items in buckets["organization"].items():
+        if normalized in existing["organization"]:
+            continue
+        value = next(
+            org
+            for page in items
+            for org in page.get("metadata", {}).get("extracted_organisations", [])
+            if org.casefold() == normalized
+        )
+        entities.append(
+            _entity(
+                "organization", "organization_candidate", value, items,
+                base_score=64,
+                method="phone_linked_public_page_organization",
+                reasoning=(
+                    "Организация упоминается рядом с исходным номером на "
+                    "публичной странице."
+                ),
+            )
+        )
+
+    for key, items in buckets["username"].items():
+        display = username_display[key]
+        normalized = display.casefold().lstrip("@")
+        if normalized in existing["username"]:
+            continue
+        entities.append(
+            _entity(
+                "username", "public_profile", display, items,
+                base_score=66,
+                method="phone_linked_public_social_profile",
+                reasoning=(
+                    "Публичный профиль найден на странице, где исходный номер "
+                    "присутствует непосредственно в тексте."
+                ),
+            )
+        )
+
     return entities
+
+
+def _count_types(entities: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entity in entities:
+        entity_type = entity.get("type", "unknown")
+        counts[entity_type] = counts.get(entity_type, 0) + 1
+    return counts
 
 
 def enrich_case_with_public_pages(case: dict) -> dict:
@@ -334,18 +578,34 @@ def enrich_case_with_public_pages(case: dict) -> dict:
             if (item.get("content_hash") or item.get("id")) not in seen
         )
 
-    email_entities = _email_entities_from_pages(case, pages)
-    case.setdefault("entities", []).extend(email_entities)
+    new_entities = _entities_from_pages(case, pages)
+    case.setdefault("entities", []).extend(new_entities)
 
-    if email_entities:
-        best = max(
-            email_entities,
-            key=lambda entity: entity["claims"][0].get("confidence", 0),
-        )["claims"][0]
-        case.setdefault("summary", {})["email"] = (
-            f"кандидат: {best['value']} ({best['confidence']}%)"
+    relationships = case.setdefault("relationships", [])
+    for entity in new_entities:
+        claim = (entity.get("claims") or [{}])[0]
+        relationships.append(
+            {
+                "from": "entity_input",
+                "to": entity.get("id"),
+                "type": "co_occurs_with_phone_on_public_page",
+                "evidence_ids": claim.get("evidence_ids", []),
+                "confidence": claim.get("confidence", 0),
+            }
         )
 
+    summary = case.setdefault("summary", {})
+    person_entities = [entity for entity in new_entities if entity.get("type") == "person"]
+    email_entities = [entity for entity in new_entities if entity.get("type") == "email"]
+
+    if person_entities and str(summary.get("fio", "")).startswith("не подтверж"):
+        best = max(person_entities, key=lambda e: e["claims"][0].get("confidence", 0))["claims"][0]
+        summary["fio"] = f"кандидат: {best['value']} ({best['confidence']}%)"
+    if email_entities and str(summary.get("email", "")).startswith("не подтверж"):
+        best = max(email_entities, key=lambda e: e["claims"][0].get("confidence", 0))["claims"][0]
+        summary["email"] = f"кандидат: {best['value']} ({best['confidence']}%)"
+
+    counts = _count_types(new_entities)
     warnings = [] if pages else [
         "Публичные страницы с точным присутствием номера не найдены или недоступны."
     ]
@@ -356,19 +616,26 @@ def enrich_case_with_public_pages(case: dict) -> dict:
             "started_at": "",
             "completed_at": "",
             "duration_ms": 0,
-            "entities": email_entities,
+            "entities": new_entities,
             "evidence": pages,
             "warnings": warnings,
             "errors": [],
             "raw_reference": None,
             "metadata": {
                 "pages_with_exact_phone": len(pages),
-                "email_candidates": len(email_entities),
+                "person_candidates": counts.get("person", 0),
+                "email_candidates": counts.get("email", 0),
+                "organization_candidates": counts.get("organization", 0),
+                "username_candidates": counts.get("username", 0),
             },
         }
     )
-    case.setdefault("summary", {})["deep_public"] = {
+    summary["deep_public"] = {
         "pages_with_exact_phone": len(pages),
-        "email_candidates": len(email_entities),
+        "person_candidates": counts.get("person", 0),
+        "email_candidates": counts.get("email", 0),
+        "organization_candidates": counts.get("organization", 0),
+        "username_candidates": counts.get("username", 0),
+        "useful_entities": len(new_entities),
     }
     return case
